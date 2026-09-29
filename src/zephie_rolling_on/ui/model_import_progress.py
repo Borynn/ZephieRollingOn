@@ -1,0 +1,432 @@
+"""Decision-model import progress dialog."""
+
+from __future__ import annotations
+
+import io
+import math
+import queue
+import threading
+import tkinter as tk
+from collections.abc import Callable
+
+from PIL import Image, ImageTk
+
+from zephie_rolling_on.decision_models.types import (
+    DecisionModelImportResult,
+    DiscoveredModel,
+)
+from zephie_rolling_on.ui.zehpie_theme import (
+    COLORS as _UI,
+    apply_zehpie_window_icon,
+    cute_font,
+)
+
+class ModelImportProgressDialog(tk.Toplevel):
+    """后台调用 ``package.import_model(on_progress=...)``，完成后等用户点「完成」。"""
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        model: DiscoveredModel,
+        *,
+        on_finished: Callable[[DiscoveredModel, DecisionModelImportResult], None]
+        | None = None,
+        on_failed: Callable[[DiscoveredModel, str], None] | None = None,
+        on_log: Callable[[str], None] | None = None,
+        preview_pct: int | None = None,
+    ) -> None:
+        super().__init__(master)
+        self.title("模型导入")
+        self.configure(bg=_UI["bg"])
+        self.transient(master)
+        self.resizable(False, False)
+        self._model = model
+        self._on_finished = on_finished
+        self._on_failed = on_failed
+        self._on_log = on_log or (lambda _m: None)
+        # Import stickers come from the package itself when it carries them.
+        self._art_busy_bytes = self._read_embedded_art("busy")
+        self._art_done_bytes = self._read_embedded_art("done")
+        self._queue: queue.Queue = queue.Queue()
+        self._result: DecisionModelImportResult | None = None
+        self._done_ok = False
+        self._closed = False
+        self._pct = int(preview_pct) if preview_pct is not None else 0
+        self._ring_angle = 0.0
+        self._photos: list[ImageTk.PhotoImage] = []
+        self._anim_job: str | None = None
+        self._preview_mode = preview_pct is not None
+
+        self._font_title = cute_font(18)
+        self._font_pct = cute_font(28)
+        self._font_sub = cute_font(11)
+        self._font_btn = cute_font(10)
+
+        icon = apply_zehpie_window_icon(self)
+        if icon is not None:
+            self._photos.append(icon)
+
+        self._build()
+        self.protocol("WM_DELETE_WINDOW", self._on_user_close)
+        self.after(50, self._poll_queue)
+        self.after(40, self._tick_ring)
+        if self._preview_mode:
+            self._pct_label.config(text=f"{self._pct}%")
+            self._draw_ring()
+        self.update_idletasks()
+        self._center(master)
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
+
+        if not self._preview_mode:
+            threading.Thread(target=self._worker, name="dm-import", daemon=True).start()
+
+    def _center(self, master: tk.Misc) -> None:
+        self.update_idletasks()
+        w, h = max(self.winfo_width(), 560), max(self.winfo_height(), 280)
+        try:
+            x = master.winfo_rootx() + max(0, (master.winfo_width() - w) // 2)
+            y = master.winfo_rooty() + max(0, (master.winfo_height() - h) // 2)
+        except tk.TclError:
+            x, y = 160, 160
+        self.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _read_embedded_art(self, which: str) -> bytes | None:
+        pkg = self._model.package
+        getter = getattr(pkg, "import_art_png", None)
+        if callable(getter):
+            return getter(which)
+        return None
+
+    def _load_art_bytes(
+        self, data: bytes | None, height: int = 210
+    ) -> ImageTk.PhotoImage | None:
+        """Load sticker from PNG bytes; flatten alpha onto card color for Tk."""
+        if not data:
+            return None
+        im = Image.open(io.BytesIO(data)).convert("RGBA")
+        if im.height != height:
+            w = max(1, int(round(im.width * (height / im.height))))
+            im = im.resize((w, height), Image.Resampling.LANCZOS)
+        hex_bg = _UI["card"].lstrip("#")
+        rgb = tuple(int(hex_bg[i : i + 2], 16) for i in (0, 2, 4))
+        base = Image.new("RGBA", im.size, rgb + (255,))
+        base.alpha_composite(im)
+        photo = ImageTk.PhotoImage(base.convert("RGB"), master=self)
+        self._photos.append(photo)
+        return photo
+
+    def _build(self) -> None:
+        shell = tk.Frame(self, bg=_UI["bg"], padx=16, pady=14)
+        shell.pack(fill="both", expand=True)
+
+        card = tk.Frame(
+            shell,
+            bg=_UI["card"],
+            highlightbackground=_UI["border"],
+            highlightcolor=_UI["border"],
+            highlightthickness=2,
+            padx=14,
+            pady=12,
+        )
+        card.pack(fill="both", expand=True)
+
+        body = tk.Frame(card, bg=_UI["card"])
+        body.pack(fill="both", expand=True)
+
+        # —— 导入中 ——
+        self._busy = tk.Frame(body, bg=_UI["card"])
+        self._busy.pack(fill="both", expand=True)
+
+        left_b = tk.Frame(self._busy, bg=_UI["card"])
+        left_b.pack(side="left", fill="y", padx=(4, 8))
+        photo_b = self._load_art_bytes(self._art_busy_bytes)
+        if photo_b is not None:
+            tk.Label(left_b, image=photo_b, bg=_UI["card"], bd=0).pack()
+        else:
+            tk.Label(
+                left_b, text="Zehpie", bg=_UI["card"], fg=_UI["accent"], font=self._font_title
+            ).pack()
+
+        right_b = tk.Frame(self._busy, bg=_UI["card"])
+        right_b.pack(side="left", fill="both", expand=True, padx=(8, 4))
+
+        ring_box = tk.Frame(right_b, bg=_UI["card"])
+        ring_box.pack(expand=True)
+        self._ring_size = 148
+        self._ring = tk.Canvas(
+            ring_box,
+            width=self._ring_size,
+            height=self._ring_size,
+            bg=_UI["card"],
+            highlightthickness=0,
+            bd=0,
+        )
+        self._ring.pack()
+        self._pct_label = tk.Label(
+            ring_box,
+            text="0%",
+            bg=_UI["card"],
+            fg=_UI["accent_deep"],
+            font=self._font_pct,
+        )
+        self._pct_label.place(
+            in_=self._ring, relx=0.5, rely=0.5, anchor="center"
+        )
+
+        self._busy_caption = tk.Label(
+            right_b,
+            text="Zehpie正在努力导入模型",
+            bg=_UI["card"],
+            fg=_UI["text"],
+            font=self._font_sub,
+        )
+        self._busy_caption.pack(pady=(4, 8))
+
+        # —— 完成 ——
+        self._done = tk.Frame(body, bg=_UI["card"])
+        # not packed until success
+
+        left_d = tk.Frame(self._done, bg=_UI["card"])
+        left_d.pack(side="left", fill="y", padx=(4, 8))
+        photo_d = self._load_art_bytes(self._art_done_bytes)
+        if photo_d is not None:
+            tk.Label(left_d, image=photo_d, bg=_UI["card"], bd=0).pack()
+
+        right_d = tk.Frame(self._done, bg=_UI["card"])
+        right_d.pack(side="left", fill="both", expand=True, padx=(8, 4))
+
+        name = self._model.display.name
+        self._done_label = tk.Label(
+            right_d,
+            text=f"{name}导入完成！",
+            bg=_UI["card"],
+            fg=_UI["accent_deep"],
+            font=self._font_title,
+            wraplength=280,
+            justify="left",
+        )
+        self._done_label.pack(expand=True, anchor="w", pady=(40, 12))
+
+        self._btn_done = tk.Button(
+            right_d,
+            text="完成",
+            command=self._on_done_click,
+            relief="flat",
+            bd=0,
+            padx=26,
+            pady=8,
+            bg=_UI["accent"],
+            fg="#FFFFFF",
+            activebackground=_UI["accent_deep"],
+            activeforeground="#FFFFFF",
+            font=self._font_btn,
+            cursor="hand2",
+            state="disabled",
+        )
+        self._btn_done.pack(anchor="e", pady=(8, 4))
+
+        # 失败时仍用 busy 布局，按钮挂在 card 底
+        self._fail_reason = tk.Label(
+            card,
+            text="",
+            anchor="w",
+            justify="left",
+            bg=_UI["card"],
+            fg="#C9786A",
+            font=self._font_sub,
+            wraplength=320,
+        )
+        self._btn_fail = tk.Button(
+            card,
+            text="关闭",
+            command=self._on_done_click,
+            relief="flat",
+            bd=0,
+            padx=22,
+            pady=6,
+            bg=_UI["pink"],
+            fg="#FFFFFF",
+            activebackground="#E889A8",
+            activeforeground="#FFFFFF",
+            font=self._font_btn,
+            cursor="hand2",
+        )
+        # 默认隐藏失败按钮
+        self._draw_ring()
+
+    def _draw_ring(self) -> None:
+        c = self._ring
+        c.delete("all")
+        s = self._ring_size
+        pad = 10
+        x0, y0, x1, y1 = pad, pad, s - pad, s - pad
+        # 底轨
+        c.create_oval(x0, y0, x1, y1, outline=_UI["ring_track"], width=10)
+        pct = max(0, min(100, int(self._pct)))
+        extent = -max(4.0, pct * 3.6)  # clockwise-ish from top
+        # 动态高光弧：随角度旋转的渐变色段
+        colors = (_UI["mint"], _UI["sky"], _UI["accent"], _UI["pink"])
+        if pct <= 0:
+            # 空闲时转小段弧
+            span = 56
+            start = 90 - self._ring_angle
+            c.create_arc(
+                x0,
+                y0,
+                x1,
+                y1,
+                start=start,
+                extent=-span,
+                style="arc",
+                outline=colors[int(self._ring_angle / 40) % len(colors)],
+                width=10,
+            )
+        else:
+            # 主进度弧
+            c.create_arc(
+                x0,
+                y0,
+                x1,
+                y1,
+                start=90,
+                extent=extent,
+                style="arc",
+                outline=_UI["accent"],
+                width=10,
+            )
+            # 旋转装饰弧（前端亮色）
+            tip = 90 + extent
+            c.create_arc(
+                x0,
+                y0,
+                x1,
+                y1,
+                start=tip - self._ring_angle * 0.15,
+                extent=-28,
+                style="arc",
+                outline=colors[int(self._ring_angle / 30) % len(colors)],
+                width=12,
+            )
+        # 外圈淡点缀
+        for i in range(8):
+            ang = math.radians(self._ring_angle + i * 45)
+            cx = s / 2 + math.cos(ang) * (s / 2 - 4)
+            cy = s / 2 + math.sin(ang) * (s / 2 - 4)
+            r = 2.2
+            c.create_oval(
+                cx - r,
+                cy - r,
+                cx + r,
+                cy + r,
+                fill=colors[i % len(colors)],
+                outline="",
+            )
+
+    def _tick_ring(self) -> None:
+        if self._closed or self._result is not None:
+            return
+        self._ring_angle = (self._ring_angle + 8) % 360
+        self._draw_ring()
+        self._anim_job = self.after(40, self._tick_ring)
+
+    def _show_done_ui(self, *, ok: bool, reason: str = "") -> None:
+        if self._anim_job is not None:
+            try:
+                self.after_cancel(self._anim_job)
+            except tk.TclError:
+                pass
+            self._anim_job = None
+        self._busy.pack_forget()
+        if ok:
+            self._done.pack(fill="both", expand=True)
+            self._btn_done.config(state="normal")
+        else:
+            self._busy.pack(fill="both", expand=True)
+            self._busy_caption.config(text="导入失败了…", fg="#C9786A")
+            if reason:
+                # 把失败原因写进界面，否则用户只能看到"导入失败"而无法排查
+                self._fail_reason.config(text=reason, wraplength=300)
+                self._fail_reason.pack(anchor="w", pady=(4, 0), before=self._btn_fail)
+            self._btn_fail.pack(anchor="e", pady=(6, 0))
+
+    def _worker(self) -> None:
+        def on_progress(pct: int, msg: str) -> None:
+            self._queue.put(("progress", int(pct), msg))
+
+        try:
+            result = self._model.package.import_model(on_progress=on_progress)
+        except Exception as exc:
+            result = DecisionModelImportResult(ok=False, message=str(exc))
+        self._queue.put(("result", result))
+
+    def _poll_queue(self) -> None:
+        if self._closed:
+            return
+        try:
+            while True:
+                item = self._queue.get_nowait()
+                kind = item[0]
+                if kind == "progress":
+                    _, pct, _msg = item
+                    self._pct = max(0, min(100, pct))
+                    self._pct_label.config(text=f"{self._pct}%")
+                    self._draw_ring()
+                elif kind == "result":
+                    self._on_import_result(item[1])
+        except queue.Empty:
+            pass
+        if not self._closed:
+            self.after(50, self._poll_queue)
+
+    def _on_import_result(self, result: DecisionModelImportResult) -> None:
+        self._result = result
+        name = self._model.display.name
+        if not result.ok:
+            self._pct = 0
+            reason = (result.message or "").strip() or "未知原因"
+            self._show_done_ui(ok=False, reason=reason)
+            self._done_ok = False
+            self._on_log(f"[决策模型] {name}导入失败：{reason}")
+            return
+        self._pct = 100
+        self._pct_label.config(text="100%")
+        self._draw_ring()
+        self._done_label.config(text=f"{name}导入完成！")
+        self._show_done_ui(ok=True)
+        self._done_ok = True
+        # 成功日志由控制面板 on_imported 统一输出「[决策模型] ***已就绪」
+
+    def _on_done_click(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._anim_job is not None:
+            try:
+                self.after_cancel(self._anim_job)
+            except tk.TclError:
+                pass
+            self._anim_job = None
+        result = self._result or DecisionModelImportResult(ok=False, message="无结果")
+        if self._done_ok and result.ok:
+            if self._on_finished is not None:
+                try:
+                    self._on_finished(self._model, result)
+                except Exception as exc:
+                    self._on_log(f"[决策模型] 完成回调异常：{exc}")
+        else:
+            if self._on_failed is not None:
+                self._on_failed(self._model, result.message or "导入失败")
+        try:
+            self.grab_release()
+        except tk.TclError:
+            pass
+        self.destroy()
+
+    def _on_user_close(self) -> None:
+        # 导入中禁止叉掉；完成后等同「完成/关闭」
+        if self._result is None:
+            return
+        self._on_done_click()

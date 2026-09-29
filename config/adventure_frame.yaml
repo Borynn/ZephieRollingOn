@@ -1,0 +1,22 @@
+# 大冒险界面框在游戏客户区中的左上角（「定位大冒险界面」确认后更新）
+# regions.yaml / click_targets.yaml 中的 left/top（或 x/y）为相对本锚点的偏移
+
+anchor:
+  left: 342
+  top: 157
+
+# 自动标定：在客户区 [search_left,search_top]→右下角 模板匹配按钮，反推锚点
+# 标定1「道具兑换」中心 = 框内 (1035,723)；标定2「排行」中心 = 框内 (1168,723)
+auto_calib:
+  search_left: 800
+  search_top: 450
+  match_threshold: 0.72
+  markers:
+    - id: daoju
+      template: assets/ui/adventure_calib_daoju.png
+      frame_x: 1035
+      frame_y: 723
+    - id: paihang
+      template: assets/ui/adventure_calib_paihang.png
+      frame_x: 1168
+      frame_y: 723

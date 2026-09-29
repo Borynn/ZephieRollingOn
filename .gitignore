@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Build artifacts (regenerated on every build)
+*.spec
+*.cache.json
+
+# The native model engine is a compiled extension, but it is a *shipped
+# artifact* for the portable build, so it is deliberately kept:
+!native/vela/*.pyd
+!native/vela/*.so
+
+# Runtime component that serves `.zm` packages. It ships in the repo so a clone
+# can run the closed models as-is. It is a compiled component, not source.
+!model_host.exe
+
+# Open-source packages are large (VELA is ~1 GB) and are published as release
+# attachments instead of being committed.
+decision_models/*.vpk
+
+# Closed packages are tracked: they are small, and issue-able model updates are
+# just new files here. See README for the distribution model.
+# Comment the next line in to stop publishing them.
+# decision_models/*.zm
+
+# Local / user state (created at runtime)
+config/ui_geometry.yaml
+config/game_window.yaml
+config/planner_state.yaml
+config/hotkeys.yaml
+# Per-user auto-click settings; factory defaults live in auto_click.default.yaml
+config/auto_click.yaml
+check_report.txt
+capture_test/
+data/printwindow_test/
+*.log
+data/debug/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

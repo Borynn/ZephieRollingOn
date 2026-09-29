@@ -1,0 +1,21 @@
+# Dev / debug toggles
+
+# 在控制面板显示：鼠标位于已绑定游戏窗口客户区内时的实时坐标
+show_cursor_coords: false
+
+# 「一键测试」是否保存检测区域调试图 → data/debug/
+one_click_test_save_debug: false
+
+# 识别循环：格子 OCR 追加保存至 data/debug/cell_ocr/
+save_ocr_debug: false
+
+# 控制面板启动后在后台预加载数字 OCR
+preload_ocr_on_startup: true
+preload_rapidocr_on_startup: true
+preload_easyocr_on_startup: false
+
+# 识别循环：幸运卡槽追加保存
+save_lucky_slot_debug: false
+
+# 识别耗时 debug（毫秒日志）
+recognition_timing_debug: false

@@ -1,0 +1,82 @@
+# 坐标相对「大冒险界面框」左上角（见 config/adventure_frame.yaml；运行时换算为客户区绝对坐标）。
+# 例外：toggle_adventure_ui 为游戏客户区绝对坐标，不经锚点换算。
+#
+# click_delivery：
+#   postmessage   — 向游戏 hwnd 发 WM_LBUTTON*（生产默认；可后台点）
+#   interception  — 驱动级鼠标（需装驱动 + pip install interception-python）
+#   sendmessage   — 同步 SendMessage
+#   human         — SendInput
+#   screen        — pyautogui（不推荐）
+click_delivery: postmessage
+
+# 投掷普通骰子；锚点 462,152 时客户区约 575,795
+roll_dice:
+  x: 113
+  y: 643
+
+# 使用幸运卡：先点该幸运卡槽中心，延迟后点 lucky_confirm 确认使用；锚点 462,152 时约 1120,670
+lucky_confirm:
+  x: 658
+  y: 518
+# 点卡槽→确认间隔：config/auto_click.yaml → click_interval_ms
+
+# 开关大冒险界面（客户区绝对坐标；postmessage 路径连点两次，替代 F12）
+# 启动/一键测试会模板匹配写回本坐标；检测配置见下方 toggle_adventure_ui_detect
+toggle_adventure_ui:
+  x: 1629
+  y: 1043
+
+# 开关按钮自动识别（单模板；以上次坐标为中心扩框）
+toggle_adventure_ui_detect:
+  template: assets/ui/toggle_adventure_btn.png
+  match_threshold: 0.78
+  expand_sizes: [200, 400, 800, 1600]
+
+# 跳过动画双击开关后：PostMessage 把游戏内指针移到大冒险框内此点（真实鼠标不动）
+skip_animation_park:
+  x: 300
+  y: 10
+
+# 自动多轮：结算弹窗关闭后等待 pre_click → 点击 2 次开新局 → 等待开局动画
+# 两次开新局点击间隔：config/auto_click.yaml → click_interval_ms
+new_round_pre_click_wait_ms: 2000
+new_round_animation_wait_ms: 3000
+new_round_clicks:
+  - {x: 113, y: 643}
+  - {x: 605, y: 560}
+
+# 新局 / 启动：自动补充骰子（框内坐标）
+# 打开补充 → 按差额点 100/10/1 → 确认；间隔：click_interval_ms
+replenish_dice_open:
+  x: 165
+  y: 550
+replenish_dice_btn_100:
+  x: 735
+  y: 403
+replenish_dice_btn_10:
+  x: 680
+  y: 403
+replenish_dice_btn_1:
+  x: 760
+  y: 358
+replenish_dice_confirm:
+  x: 650
+  y: 530
+
+# 卡池列表：开关按钮 + 向下拖拽滚动（坐标相对大冒险框）
+deck_pool_toggle:
+  x: 660
+  y: 725
+deck_pool_drag_from:
+  x: 482
+  y: 152
+deck_pool_drag_to:
+  x: 482
+  y: 648
+
+# 跳过感叹号格奖励：检测到「执行任务」弹窗后依次点击 3 次
+# 连点间隔：config/auto_click.yaml → click_interval_ms
+skip_exclamation_clicks:
+  - {x: 650, y: 360}
+  - {x: 780, y: 605}
+  - {x: 335, y: 605}

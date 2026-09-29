@@ -1,0 +1,1 @@
+# Auto-click / mouse helpers.

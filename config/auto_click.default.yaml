@@ -1,0 +1,22 @@
+# 出厂默认值（随软件分发，不要在此文件记录用户改动）
+#
+# 用户的实际设置在 config/auto_click.yaml（gitignore，覆盖更新时保留）。
+# 该文件缺失时由此文件提供初值；两者都存在时以 auto_click.yaml 为准。
+
+# 跳过「感叹号格」奖励弹窗
+skip_exclamation_reward: true
+
+# 投骰/用卡后跳过动画（interception 下按 F12，其余点击开关界面）
+skip_animation_via_f12: true
+
+# 可用骰子为 0 时自动补充
+auto_replenish_dice: true
+
+# 脚本操作期间屏蔽游戏区鼠标输入（当前未启用；见 executor/mouse_shield.py）
+block_mouse_in_game: false
+
+# 统一点击间隔（毫秒），最低 50
+click_interval_ms: 100
+
+# 操作后连续同格的次数达到该值，判定未点上并重放上次操作
+same_cell_retry_after: 3

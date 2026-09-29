@@ -1,0 +1,32 @@
+Zephie Rolling On Non-Commercial License
+Copyright (c) 2026 Zephie Rolling On contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to use,
+copy, modify, and share the Software for non-commercial purposes only, subject
+to the following conditions:
+
+1. Non-commercial use only. Selling the Software, charging for access or
+   distribution, or using the Software as part of a commercial product or
+   service is prohibited without prior written permission from the copyright
+   holders.
+2. The above copyright notice and this permission notice shall be included in
+   all copies or substantial portions of the Software.
+3. Decision model binaries (*.dll) redistributed with this project remain
+   subject to the same non-commercial restriction unless a separate license
+   is provided with that model.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+中文摘要（以英文正文为准）：
+本软件仅允许非商业目的使用、复制、修改与分享。禁止出售、收费分发，或将本
+软件用于商业产品/服务（除非事先获得书面许可）。决策模型 DLL 若随本项目分发，
+同样禁止商用，除非该模型另有单独许可。

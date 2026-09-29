@@ -1,0 +1,14 @@
+# conda env for ZephieRollingOn
+#   conda env create -f environment.yml
+#   conda activate zephie_rolling_on
+#   python -m zephie_rolling_on.ui
+
+name: zephie_rolling_on
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - -r requirements.txt
+      - -e .

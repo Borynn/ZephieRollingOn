@@ -1,0 +1,244 @@
+# 像素坐标：相对「大冒险界面框」左上角（见 config/adventure_frame.yaml 锚点；运行时换算为客户区绝对坐标）
+
+# 当前格子显示区域（锚点 462,152 时客户区约 527,270）→ 宽 90 高 25
+# OCR 目标文案格式：「{数字}格」，例如 42格
+cell_id_region:
+  left: 87
+  top: 120
+  width: 43
+  height: 21
+
+# 格子变灰（过场/遮罩）时不 OCR、不触发格子变化与规划；正常时数字为亮白高对比
+# 仅框数字时暗背景占多数，用峰值亮度 + 亮白占比（不用 p95）
+# 亮白笔画阈值：灰屏压暗后数字峰值常 <200，正常亮白数字为 255
+cell_display_bright_luma: 200
+cell_display_min_max_luma: 200
+cell_display_min_bright_ratio: 0.01
+cell_display_strong_peak_luma: 235
+cell_display_min_bright_pixels: 8
+cell_display_min_contrast: 40
+cell_display_min_std: 18
+# ROI 已仅框数字、不含「格」；1.0 表示不再做内部二次裁剪
+cell_digit_width_frac: 1.0
+# 格子 OCR：亮字连通域分割 + 逐字识别（见 vision/cell_ocr.py）
+cell_ocr_upscale: 10
+cell_ocr_bright_thresh: 120
+cell_ocr_glyph_pad: 4
+cell_ocr_min_glyph_area: 30
+cell_ocr_min_glyph_height: 5
+cell_ocr_morph_close_iter: 2
+# 连通域过多（如灰屏噪声碎块）时不 OCR，避免误读
+cell_ocr_max_glyphs: 8
+# 任一字置信度过低时，触发按位合并（见 cell_ocr.py + assets/cell_ocr/tail_ref_*.png）
+cell_ocr_low_glyph_conf: 0.75
+cell_ocr_lock_glyph_conf: 0.90
+cell_ocr_fallback_min_conf: 0.80
+# 10× 连通域亮像素：真 3 中位 ~1931，真 7 ~1383，歧义末位 ~1393
+cell_ocr_area_seven_max: 1500
+cell_ocr_area_three_min: 1750
+cell_ocr_fallback_min_width: 320
+cell_ocr_fallback_min_height: 80
+# 相对上一可信格子的步长合理性（一次行为通常 <150 格；跳关等放宽到 relaxed）
+cell_max_step_delta: 150
+cell_relaxed_step_delta: 500
+
+# 数字 OCR 引擎（格子号 + 已用骰子共用）：fast=RapidOCR | legacy=EasyOCR
+# digit_ocr_engine preferred; cell_id_engine accepted as alias
+digit_ocr_engine: fast
+cell_id_engine: fast
+cell_id_max: 2900
+# fast 失败时是否回退 legacy（调 ROI 时建议 true）
+cell_id_fallback_legacy: true
+dice_ocr_fallback_legacy: true
+cell_id_fast_min_width: 320
+cell_id_fast_min_height: 80
+dice_ocr_fast_min_width: 320
+dice_ocr_fast_min_height: 80
+
+# 已用投掷次数（仅框住数字，不含 /100）；锚点 462,152 时客户区约 579,877
+# OCR 目标：已用次数纯数字（开局 0 也要完整框住）；剩余 = dice_total - 已用
+dice_usage_region:
+  left: 120
+  top: 725  
+  width: 42
+  height: 23
+dice_total: 100
+
+# 可用骰子数（游戏内骰子道具数量；与决策用「已用/剩余」不是同一概念）
+# 合计 = region_a + region_b；坐标相对大冒险框，角点 (left,top)-(right,bottom)
+# A: (115,700)-(160,715)；B: (165,700)-(200,715)，B 区先擦「+」再 OCR
+inventory_dice_region_a:
+  left: 115
+  top: 700
+  width: 45
+  height: 15
+inventory_dice_region_b:
+  left: 165
+  top: 700
+  width: 35
+  height: 15
+inventory_dice_max: 99999
+inventory_dice_max_digits: 5
+inventory_dice_plus_template: assets/ui/inventory_dice_plus.png
+inventory_dice_plus_match_threshold: 0.55
+# BGR：把「+」涂成深红底
+inventory_dice_plus_fill_bgr: [55, 44, 150]
+
+# 充能骰子数；框内 (82,544)-(121,562)
+charge_dice_region:
+  left: 82
+  top: 544
+  width: 39
+  height: 18
+
+# 幸运卡槽；锚点 462,152 时客户区约 877,855
+lucky_cards_region:
+  left: 422
+  top: 703
+  width: 220
+  height: 40
+
+# 幸运卡模板匹配：写死每格区域（相对 lucky_cards_region 左上角，220×40 标定）
+# 全屏客户区坐标 ≈ left+760, top+860
+# 槽1~3 已对齐(4,46,88 宽38)；槽4~5 由右缘 margin=4 反推，槽3 与槽4 间约 8px 缝
+lucky_card_slots:
+  - slot: 1
+    left: 4
+    top: 0
+    width: 38
+    height: 38
+  - slot: 2
+    left: 46
+    top: 0
+    width: 38
+    height: 38
+  - slot: 3
+    left: 89
+    top: 0
+    width: 38
+    height: 38
+  # 槽4~5：由槽1~3 间距(42) 与右缘对齐推算，槽3 后缝隙略大
+  - slot: 4
+    left: 132
+    top: 0
+    width: 38
+    height: 38
+  - slot: 5
+    left: 175
+    top: 0
+    width: 38
+    height: 38
+
+lucky_match_threshold: 0.68
+lucky_match_max_cards: 5
+
+# 踩到特殊效果格后画面变灰、弹出奖励确认。变灰时在搜索区内模板匹配「确认」按钮，
+# 命中后立即点其中心。搜索区坐标相对大冒险界面框左上角。
+confirm_button:
+  template: assets/ui/confirm_button.png
+  # 搜索区；锚点 462,152 时客户区约 690,300
+  search:
+    left: 228
+    top: 148
+    width: 960
+    height: 530
+  match_threshold: 0.72
+
+# H 类格子：变灰时弹出「执行任务」（与确认按钮同区、互斥）；命中后自动点击立即暂停
+execute_task_button:
+  template: assets/ui/execute_task_button.png
+  search:
+    left: 228
+    top: 148
+    width: 960
+    height: 530
+  match_threshold: 0.72
+
+# 本局冒险完成：灰屏 + 「已完成冒险。」横幅
+# search 在 resolve_regions 时强制与 execute_task_button.search 相同（勿单独改此处期望生效）
+adventure_complete_banner:
+  template: assets/ui/adventure_complete_banner.png
+  search:
+    left: 228
+    top: 148
+    width: 960
+    height: 530
+  match_threshold: 0.68
+
+# 左下角投骰按钮：免费=DOUBLE / 付费=橙黄骰 / 开局=START（框内 10,585 → 210,690）
+roll_kind:
+  free_template: assets/ui/free_dice_double.png
+  paid_template: assets/ui/paid_dice.png
+  start_template: assets/ui/start_roll_btn.png
+  search:
+    left: 10
+    top: 585
+    width: 200
+    height: 105
+  match_threshold: 0.70
+
+# 卡池已抽勾：两轮检测（坐标相对大冒险框；点 660,725 开/关列表）
+# 第1轮中心 (250,146) 起每行 +30；第2轮拖拽后中心 (250,326) 起每行 +30；容差 ±4
+deck_pool:
+  drawn_template: assets/ui/deck_drawn_mark.png
+  match_threshold: 0.70
+  center_tolerance: 4
+  row_step: 30
+  open_wait_sec: 0.6
+  after_drag_wait_sec: 0.5
+  close_wait_sec: 0.3
+  round1:
+    search:
+      left: 237
+      top: 135
+      width: 23
+      height: 535
+    first_center:
+      x: 250
+      y: 146
+    cards:
+      - forward_1
+      - forward_2
+      - forward_3
+      - forward_4
+      - forward_4
+      - forward_5
+      - forward_5
+      - forward_6
+      - forward_6
+      - forward_7
+      - forward_7
+      - forward_8
+      - forward_8
+      - forward_9
+      - forward_9
+      - forward_10
+      - forward_10
+      - forward_11
+  round2:
+    search:
+      left: 237
+      top: 316
+      width: 23
+      height: 354
+    first_center:
+      x: 250
+      y: 326
+    cards:
+      - forward_12
+      - back_1
+      - back_2
+      - back_3
+      - multiply_2
+      - multiply_3
+      - multiply_5
+      - multiply_7
+      - multiply_8
+      - multiply_10
+      - next_1
+      - next_1
+
+poll_interval_seconds: 0.2
+# GUI「启动规划建议」循环：轻量格子检测间隔（秒）
+advice_poll_interval_seconds: 1.0
+default_lucky_tier: 0

@@ -1,0 +1,141 @@
+version: 1
+lucky_slot_region:
+  left: 760
+  top: 860
+  width: 220
+  height: 40
+  note: 单格区域见 config/regions.yaml lucky_card_slots
+card_count: 22
+cards:
+- id: next_1
+  type: next
+  value: 1
+  consumes_dice: false
+  template: templates/next/next_1.png
+  description: 传送到下一关跳关终点，不消耗骰子
+- id: multiply_2
+  type: multiply
+  value: 2
+  consumes_dice: true
+  template: templates/multiply/multiply_02.png
+  description: 投骰结果 ×2，消耗 1 个骰子
+- id: multiply_3
+  type: multiply
+  value: 3
+  consumes_dice: true
+  template: templates/multiply/multiply_03.png
+  description: 投骰结果 ×3，消耗 1 个骰子
+- id: multiply_5
+  type: multiply
+  value: 5
+  consumes_dice: true
+  template: templates/multiply/multiply_05.png
+  description: 投骰结果 ×5，消耗 1 个骰子
+- id: multiply_7
+  type: multiply
+  value: 7
+  consumes_dice: true
+  template: templates/multiply/multiply_07.png
+  description: 投骰结果 ×7，消耗 1 个骰子
+- id: multiply_8
+  type: multiply
+  value: 8
+  consumes_dice: true
+  template: templates/multiply/multiply_08.png
+  description: 投骰结果 ×8，消耗 1 个骰子
+- id: multiply_10
+  type: multiply
+  value: 10
+  consumes_dice: true
+  template: templates/multiply/multiply_10.png
+  description: 投骰结果 ×10，消耗 1 个骰子
+- id: forward_1
+  type: step_forward
+  value: 1
+  consumes_dice: false
+  template: templates/step_forward/forward_01.png
+  description: 前进 1 格，不消耗骰子
+- id: forward_2
+  type: step_forward
+  value: 2
+  consumes_dice: false
+  template: templates/step_forward/forward_02.png
+  description: 前进 2 格，不消耗骰子
+- id: forward_3
+  type: step_forward
+  value: 3
+  consumes_dice: false
+  template: templates/step_forward/forward_03.png
+  description: 前进 3 格，不消耗骰子
+- id: forward_4
+  type: step_forward
+  value: 4
+  consumes_dice: false
+  template: templates/step_forward/forward_04.png
+  description: 前进 4 格，不消耗骰子
+- id: forward_5
+  type: step_forward
+  value: 5
+  consumes_dice: false
+  template: templates/step_forward/forward_05.png
+  description: 前进 5 格，不消耗骰子
+- id: forward_6
+  type: step_forward
+  value: 6
+  consumes_dice: false
+  template: templates/step_forward/forward_06.png
+  description: 前进 6 格，不消耗骰子
+- id: forward_7
+  type: step_forward
+  value: 7
+  consumes_dice: false
+  template: templates/step_forward/forward_07.png
+  description: 前进 7 格，不消耗骰子
+- id: forward_8
+  type: step_forward
+  value: 8
+  consumes_dice: false
+  template: templates/step_forward/forward_08.png
+  description: 前进 8 格，不消耗骰子
+- id: forward_9
+  type: step_forward
+  value: 9
+  consumes_dice: false
+  template: templates/step_forward/forward_09.png
+  description: 前进 9 格，不消耗骰子
+- id: forward_10
+  type: step_forward
+  value: 10
+  consumes_dice: false
+  template: templates/step_forward/forward_10.png
+  description: 前进 10 格，不消耗骰子
+- id: forward_11
+  type: step_forward
+  value: 11
+  consumes_dice: false
+  template: templates/step_forward/forward_11.png
+  description: 前进 11 格，不消耗骰子
+- id: forward_12
+  type: step_forward
+  value: 12
+  consumes_dice: false
+  template: templates/step_forward/forward_12.png
+  description: 前进 12 格，不消耗骰子
+- id: back_1
+  type: step_back
+  value: 1
+  consumes_dice: false
+  template: templates/step_back/back_01.png
+  description: 后退 1 格，不消耗骰子
+- id: back_2
+  type: step_back
+  value: 2
+  consumes_dice: false
+  template: templates/step_back/back_02.png
+  description: 后退 2 格，不消耗骰子
+- id: back_3
+  type: step_back
+  value: 3
+  consumes_dice: false
+  template: templates/step_back/back_03.png
+  description: 后退 3 格，不消耗骰子
