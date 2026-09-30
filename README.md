@@ -2,7 +2,7 @@
 
 游戏辅助脚本：窗口绑定、画面识别、自动点击，以及决策模型调用。
 
-Package: `zephie_rolling_on` · Dist: `zephie-rolling-on` · Version `1.0.1`
+Package: `zephie_rolling_on` · Dist: `zephie-rolling-on` · Version `1.0.2`
 
 **系统要求：Windows 10 / Windows 11，仅 64 位。**
 

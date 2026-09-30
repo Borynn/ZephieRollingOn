@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zephie-rolling-on"
-version = "1.0.1"
+version = "1.0.2"
 description = "Zephie Rolling On — game assist UI, recognition, auto-click, decision DLL client"
 readme = "README.md"
 requires-python = ">=3.10"

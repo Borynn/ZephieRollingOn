@@ -41,7 +41,7 @@ if ($cvFile -match "opencv.python" -and $cvFile -notmatch "headless") {
     if ($LASTEXITCODE -ne 0) { throw "opencv-python-headless install failed" }
 }
 
-$Version = "1.0.1"
+$Version = "1.0.2"
 $distName = "ZephieRollingOn!"
 $workDist = Join-Path $Root "dist\$distName"
 $outDir = Join-Path $Root "dist\ZephieRollingOn_v$Version"

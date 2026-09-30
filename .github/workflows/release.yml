@@ -2,7 +2,7 @@ name: Release
 
 # Builds the portable Windows package and attaches it to a GitHub Release.
 #
-# Triggered by pushing a version tag (`v1.0.1`); the tag must match the version
+# Triggered by pushing a version tag (`v1.0.2`); the tag must match the version
 # hardcoded in scripts/build_portable.ps1, otherwise the job fails early rather
 # than publishing a mislabelled artifact.
 
