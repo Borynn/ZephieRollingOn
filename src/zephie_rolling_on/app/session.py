@@ -586,15 +586,17 @@ class ScriptSession:
     def _end_round_on_start_and_begin_new(
         self, *, score: float | None = None
     ) -> bool:
-        """检测到 START：结算本局并立刻 new_round_clicks×2，再等新局骰子。"""
+        """检测到 START：结算本局，等局末动画后点两次开新局，再等新局骰子。
+
+        局末结算动画无法跳过，因此**必须先等**（``new_round_pre_click_wait_ms``）
+        再点；早先这里直接点击，导致两次点击落在动画上而开不出新局。
+        """
         _ = score
         if not self._finalize_round_on_adventure_complete():
             return False
         self._pending_new_round_start = False
-        self.on_log("[轮次] 本局已结束，立即点击开启新局…")
-        executor_actions.start_new_round(
-            self.hwnd, on_log=None, skip_pre_wait=True
-        )
+        self.on_log("[轮次] 本局已结束，准备开启新局…")
+        executor_actions.start_new_round(self.hwnd, on_log=self.on_log)
         self._waiting_new_round_dice = True
         return True
 

@@ -34,12 +34,27 @@ _FALLBACK: dict = {
     "click_interval_ms": 100,
     "click_interval_jitter_ms": 20,
     "same_cell_retry_after": 3,
+    "new_round_pre_click_wait_ms": 2000,
+    "new_round_animation_wait_ms": 3000,
 }
 
 # 统一连点间隔（毫秒）；所有场景共用，界面与 yaml 最低 50。
 _DEFAULT_CLICK_INTERVAL_MS = 100
 _MIN_CLICK_INTERVAL_MS = 50
 _DEFAULT_SAME_CELL_RETRY_AFTER = 3
+
+# 检测到 START（本局结束）后，等待多久再点两次开新局（毫秒）。
+#
+# 局末结算动画**无法跳过**，必须等它放完；否则两次点击会落在动画上而失效，
+# 表现就是「检测到 START 却开不出新局」。慢机器/低配机上动画更久，所以这是
+# 可调项（改 config/auto_click.yaml，**未做界面**）。
+_DEFAULT_NEW_ROUND_PRE_CLICK_WAIT_MS = 2000
+
+# 两次开新局点击完成后，等待开局动画（毫秒），之后才开始识别新局骰子。
+_DEFAULT_NEW_ROUND_ANIMATION_WAIT_MS = 3000
+
+# 两个等待的上限：避免误填一个极大值把脚本卡死（记为秒差）
+_MAX_NEW_ROUND_WAIT_MS = 120_000
 
 # 点击间隔的随机扰动幅度（毫秒）。真人不会每次都用同一个间隔，固定间隔本身
 # 就是一种可识别的规律。
@@ -266,6 +281,47 @@ def load_same_cell_retry_after(path: Path | None = None) -> int:
     except (TypeError, ValueError):
         n = _DEFAULT_SAME_CELL_RETRY_AFTER
     return max(1, n)
+
+
+def _load_new_round_wait_ms(
+    key: str, default_ms: int, path: Path | None = None
+) -> float:
+    """读取「开新局」相关的等待时长（毫秒），夹紧到 ``[0, 上限]``。
+
+    负值当 0（不等），超上限则截断——误填一个极大值会把脚本长时间卡住，
+    而这类值来自手改 yaml，必须容错。
+    """
+    raw = load_auto_click_config(path).get(key, default_ms)
+    try:
+        ms = float(raw)
+    except (TypeError, ValueError):
+        ms = float(default_ms)
+    return min(max(0.0, ms), float(_MAX_NEW_ROUND_WAIT_MS))
+
+
+def load_new_round_pre_click_wait_ms(path: Path | None = None) -> float:
+    """检测到 START 后、点两次开新局之前的等待（毫秒）。
+
+    用于等局末结算动画放完（该动画无法跳过）。**未做界面**：改
+    config/auto_click.yaml 后重启生效。
+    """
+    return _load_new_round_wait_ms(
+        "new_round_pre_click_wait_ms",
+        _DEFAULT_NEW_ROUND_PRE_CLICK_WAIT_MS,
+        path,
+    )
+
+
+def load_new_round_animation_wait_ms(path: Path | None = None) -> float:
+    """两次开新局点击之后、开始识别新局骰子之前的等待（毫秒）。
+
+    用于等开局动画。**未做界面**：改 config/auto_click.yaml 后重启生效。
+    """
+    return _load_new_round_wait_ms(
+        "new_round_animation_wait_ms",
+        _DEFAULT_NEW_ROUND_ANIMATION_WAIT_MS,
+        path,
+    )
 
 
 def load_skip_exclamation_reward(path: Path | None = None) -> bool:

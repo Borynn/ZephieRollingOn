@@ -12,6 +12,8 @@ from zephie_rolling_on.data.auto_click_config import (
     click_interval_range_text,
     jittered_click_interval_sec,
     load_click_interval_sec,
+    load_new_round_animation_wait_ms,
+    load_new_round_pre_click_wait_ms,
     load_skip_animation_via_f12,
     skip_animation_effective,
 )
@@ -297,26 +299,27 @@ def start_new_round(
     hwnd: int | None,
     *,
     on_log: Callable[[str], None] | None = None,
-    skip_pre_wait: bool = False,
 ) -> bool:
-    """开启新一局：按 new_round_clicks 顺序点击 2 次，第二次后等待开局动画。
+    """开启新一局：等局末动画 → 按 new_round_clicks 点 2 次 → 等开局动画。
 
-    ``skip_pre_wait=True``：检测到 START 后立即点，跳过本局结束后的预等待。
-    两次点击间隔：``click_interval_ms``。
+    时序由 ``config/auto_click.yaml`` 控制（均无界面，改后重启生效）：
+
+    ``new_round_pre_click_wait_ms``
+        检测到 START 后的等待。局末结算动画**无法跳过**，必须等它放完；否则
+        两次点击会落在动画上而失效，表现就是「检测到 START 却开不出新局」。
+    ``new_round_animation_wait_ms``
+        两次点击后等开局动画，之后才开始识别新局骰子。
+
+    两次点击之间的间隔用 ``click_interval_ms``。
     """
     log = on_log or (lambda _m: None)
-    try:
-        targets = _load_click_targets()
-        anim_sec = max(0.0, float(targets.get("new_round_animation_wait_ms", 3000)) / 1000.0)
-        pre_sec = max(0.0, float(targets.get("new_round_pre_click_wait_ms", 2000)) / 1000.0)
-    except (TypeError, ValueError):
-        anim_sec = 3.0
-        pre_sec = 2.0
-    if pre_sec > 0 and not skip_pre_wait:
-        log(f"[新局] 本局结束后等待 {pre_sec:g}s，再开始点击…")
+    anim_sec = load_new_round_animation_wait_ms() / 1000.0
+    pre_sec = load_new_round_pre_click_wait_ms() / 1000.0
+
+    if pre_sec > 0:
+        log(f"[新局] 等待局末结算动画 {pre_sec:g}s（该动画无法跳过）…")
         time.sleep(pre_sec)
-    elif skip_pre_wait:
-        log("[新局] START 已出现，跳过预等待，立即点击…")
+
     delay_sec = load_click_interval_sec()
     any_ok = _click_configured_sequence(
         hwnd,
@@ -332,8 +335,9 @@ def start_new_round(
     if not any_ok:
         log("[新局] 两次点击均未执行（坐标未标定）；请在 click_targets.yaml 填写 new_round_clicks")
         return False
-    log(f"[新局] 第二次点击完成，等待开局动画 {anim_sec:g}s…")
-    time.sleep(anim_sec)
+    if anim_sec > 0:
+        log(f"[新局] 第二次点击完成，等待开局动画 {anim_sec:g}s…")
+        time.sleep(anim_sec)
     return True
 
 

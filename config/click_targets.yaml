@@ -39,10 +39,9 @@ skip_animation_park:
   x: 300
   y: 10
 
-# 自动多轮：结算弹窗关闭后等待 pre_click → 点击 2 次开新局 → 等待开局动画
-# 两次开新局点击间隔：config/auto_click.yaml → click_interval_ms
-new_round_pre_click_wait_ms: 2000
-new_round_animation_wait_ms: 3000
+# 自动多轮：结算弹窗关闭后 → 等局末动画 → 点击 2 次开新局 → 等开局动画
+# 两个等待时长在 config/auto_click.yaml（new_round_pre_click_wait_ms /
+# new_round_animation_wait_ms）；两次点击间隔同样读 click_interval_ms
 new_round_clicks:
   - {x: 113, y: 643}
   - {x: 605, y: 560}
