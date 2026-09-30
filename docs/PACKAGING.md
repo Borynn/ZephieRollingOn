@@ -87,11 +87,15 @@ ZephieRollingOn_v<版本>/        # 解压后的根目录（名可自定）
 
 `.github/workflows/release.yml`：推送 `v*` 标签时自动构建便携包并创建 Release。
 
-- Python **3.11**（`setup-python`）——必须与内置引擎的 `cp311` ABI 一致，
-  否则构建能过、运行时才失败
-- 先校验标签与 `scripts/build_portable.ps1` 里的 `$Version` 一致，避免发布名不符实的产物
+- **用 conda 环境构建**（`conda-incubator/setup-miniconda`）——与本地一致。构建脚本会从
+  解释器 prefix 同步 Tcl/Tk（`Library\lib\tcl8.6`、`Library\bin`），这是 conda 专有布局；
+  用 python.org 的解释器时那段会被静默跳过，应用就只能依赖 PyInstaller 自己的 hook。
+  一个 `Report build environment` 步骤会把该布局打出来，便于日后定位。
+- Python **3.11**——必须与内置引擎的 `cp311` ABI 一致，否则构建能过、运行时才失败
+- 先校验标签与脚本里的 `$Version` 一致，避免发布名不符实的产物
 - 再校验运行时组件齐全（`model_host.exe`、两个引擎、`map.xlsx`、`LICENSE`、`NOTICE`、两个模型包）
-- 构建 → 打成 `ZephieRollingOn_v<版本>.zip` → 上传 artifact → 创建 Release 并附带 zip
+- 构建 → 打包 → **校验模型包确实进了产物** → 上传 artifact → 创建 Release 并附带 zip
+- 手动触发（`workflow_dispatch`）只构建与上传，不创建 Release，并会显式警告说明
 
 发布新版本：改好 `$Version`（以及 `pyproject.toml`、`__init__.py`）后打标签 `v<版本>` 并推送。
 

@@ -23,20 +23,44 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # conda rather than `setup-python`, to match how the package is actually
+      # built locally. The build script syncs Tcl/Tk from the interpreter prefix
+      # (`Library\lib\tcl8.6`, `Library\bin`) — a conda-only layout. A
+      # python.org interpreter has no such paths, so that step silently does
+      # nothing and the app depends entirely on PyInstaller's own Tcl/Tk hook.
+      # Using conda removes that difference between CI and local builds.
+      #
       # Python 3.11 on purpose: the bundled native engine is a `cp311` extension
-      # (`vela_official*.cp311-win_amd64.pyd`), which cannot be imported by any
-      # other Python version. A `cp312` build would fail at runtime, not here.
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      # (`vela_official*.cp311-win_amd64.pyd`), which no other version can import.
+      - name: Set up conda environment (Python 3.11)
+        uses: conda-incubator/setup-miniconda@v3
         with:
           python-version: "3.11"
-          cache: pip
+          activate-environment: zephie_rolling_on
+          auto-activate-base: false
+          miniforge-version: latest
 
       - name: Install dependencies
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install "pyinstaller>=6.0"
+
+      # Surfaces the Tcl/Tk layout in the log. If a future run fails inside the
+      # build script, this says immediately whether the cause is a missing
+      # interpreter-prefix layout (i.e. the wrong Python distribution was used).
+      - name: Report build environment
+        shell: pwsh
+        run: |
+          $prefix = python -c "import sys; print(sys.prefix)"
+          Write-Host "python      : $(python -c 'import sys; print(sys.version)')"
+          Write-Host "sys.prefix  : $prefix"
+          foreach ($rel in @("Library\lib\tcl8.6", "Library\lib\tk8.6", "Library\bin")) {
+            $p = Join-Path $prefix $rel
+            $state = if (Test-Path $p) { "present" } else { "MISSING" }
+            Write-Host ("  {0,-24} {1}" -f $rel, $state)
+          }
 
       # A tag/script mismatch would publish an artifact whose name and contents
       # disagree; catch it before spending build minutes.
@@ -75,6 +99,18 @@ jobs:
         shell: pwsh
         run: ./scripts/build_portable.ps1
 
+      # The bundled model packages are ~58 MB combined; if they are missing the
+      # release would look fine but be useless to a user, so check here too.
+      - name: Verify model packages were bundled
+        shell: pwsh
+        run: |
+          $out = "dist/ZephieRollingOn_v$env:VERSION"
+          foreach ($m in @("decision_models/vela_v4.1.vpk", "decision_models/zephie_m1_points.zm")) {
+            $p = Join-Path $out $m
+            if (-not (Test-Path $p)) { throw "model package not bundled: $m" }
+            Write-Host ("  {0,-40} {1,12:N0} B" -f $m, (Get-Item $p).Length)
+          }
+
       - name: Package
         shell: pwsh
         run: |
@@ -94,11 +130,19 @@ jobs:
           if-no-files-found: error
 
       - name: Create release
-        if: github.ref_type == 'tag'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # A manual run (workflow_dispatch) is for building and checking the
+          # package, not for publishing. This used to be a silent `if:` on the
+          # step, which produced a green run with no release and no explanation —
+          # say so loudly instead.
+          if ("${{ github.ref_type }}" -ne "tag") {
+            Write-Host "::warning::ref_type=${{ github.ref_type }} (not a tag) — built and uploaded the artifact, but skipped release creation."
+            exit 0
+          }
+
           $tag = "${{ github.ref_name }}"
           # Built as an array, not a here-string: PowerShell requires a here-string
           # terminator at column 0, which YAML indentation cannot satisfy.
