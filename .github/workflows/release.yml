@@ -23,13 +23,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # conda rather than `setup-python`, to match how the package is actually
-      # built locally. The build script syncs Tcl/Tk from the interpreter prefix
-      # (`Library\lib\tcl8.6`, `Library\bin`) — a conda-only layout. A
-      # python.org interpreter has no such paths, so that step silently does
-      # nothing and the app depends entirely on PyInstaller's own Tcl/Tk hook.
-      # Using conda removes that difference between CI and local builds.
-      #
+      # conda rather than `setup-python`, to match how the package is built
+      # locally. Two reasons:
+      #   1. The build script syncs Tcl/Tk from the interpreter prefix
+      #      (`Library\lib\tcl8.6`, `Library\bin`) — a conda-only layout. A
+      #      python.org interpreter has no such paths, so that step would
+      #      silently do nothing.
+      #   2. conda-forge's `python` declares `tk` as a dependency, so Tcl/Tk is
+      #      supplied the same way as locally.
       # Python 3.11 on purpose: the bundled native engine is a `cp311` extension
       # (`vela_official*.cp311-win_amd64.pyd`), which no other version can import.
       - name: Set up conda environment (Python 3.11)
@@ -40,16 +41,25 @@ jobs:
           auto-activate-base: false
           miniforge-version: latest
 
-      - name: Install dependencies
+      # Fails fast and offline: a floor bumped in requirements.txt without
+      # regenerating the lock would otherwise keep building on the old pin.
+      # The logic lives in a script, not inline: it needs PEP 440 version
+      # comparison, and `scripts/` is where this project keeps its gates.
+      - name: Verify lock satisfies requirements.txt
+        shell: pwsh
+        run: python scripts/check_lock.py
+
+      # The lock, not requirements.txt: the latter states only lower bounds, so
+      # builds would drift as new releases appear. The lock also carries the build
+      # toolchain (PyInstaller, setuptools) so CI and local agree exactly.
+      - name: Install pinned dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install "pyinstaller>=6.0"
+          python -m pip install -r requirements.lock
 
-      # Surfaces the Tcl/Tk layout in the log. If a future run fails inside the
-      # build script, this says immediately whether the cause is a missing
-      # interpreter-prefix layout (i.e. the wrong Python distribution was used).
+      # Surfaces the Tcl/Tk layout in the log. If a build ever fails, this says
+      # immediately whether the cause is a missing interpreter-prefix layout.
       - name: Report build environment
         shell: pwsh
         run: |
@@ -61,6 +71,9 @@ jobs:
             $state = if (Test-Path $p) { "present" } else { "MISSING" }
             Write-Host ("  {0,-24} {1}" -f $rel, $state)
           }
+          Write-Host "key pins:"
+          python -m pip show pillow numpy onnxruntime opencv-python-headless rapidocr pyinstaller 2>$null |
+            Select-String -Pattern '^(Name|Version):' | ForEach-Object { "  $($_.Line.Trim())" }
 
       # A tag/script mismatch would publish an artifact whose name and contents
       # disagree; catch it before spending build minutes.
@@ -136,14 +149,24 @@ jobs:
         run: |
           # A manual run (workflow_dispatch) is for building and checking the
           # package, not for publishing. This used to be a silent `if:` on the
-          # step, which produced a green run with no release and no explanation —
-          # say so loudly instead.
+          # step, which produced a green run with no release and no explanation.
           if ("${{ github.ref_type }}" -ne "tag") {
             Write-Host "::warning::ref_type=${{ github.ref_type }} (not a tag) — built and uploaded the artifact, but skipped release creation."
             exit 0
           }
 
           $tag = "${{ github.ref_name }}"
+          $repo = $env:GITHUB_REPOSITORY
+
+          # Re-running for a tag that already has a release would fail with
+          # "release already exists". Replace it, so a re-release needs no manual
+          # cleanup (and deleting the release leaves the tag intact).
+          gh release view $tag --repo $repo *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "release $tag already exists — replacing it"
+            gh release delete $tag --repo $repo --yes
+          }
+
           # Built as an array, not a here-string: PowerShell requires a here-string
           # terminator at column 0, which YAML indentation cannot satisfy.
           # Backticks are avoided for the same reason (they escape in "")

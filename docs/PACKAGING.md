@@ -83,6 +83,45 @@ ZephieRollingOn_v<版本>/        # 解压后的根目录（名可自定）
 | 模型包 | 只替换/新增 `decision_models/` 下的包，界面点「导入」 |
 | 脚本界面 | 用新压缩包覆盖解压目录（可保留用户已改的 `config/` 与已下的模型） |
 
+## 依赖锁定与可复现构建
+
+两份文件分工不同：
+
+| 文件 | 作用 |
+|---|---|
+| `requirements.txt` | **声明**运行依赖，只有下界（`numpy>=1.24.0`） |
+| `requirements.lock` | **锁定**完整依赖树（含 PyInstaller / setuptools），用于可复现构建 |
+
+`requirements.txt` 只有下界意味着「谁构建、什么时候构建」会装到不同版本 —— 这正是 CI 与本地
+曾经产生差异的原因。**CI 用锁文件安装**，本地想复现同样环境也应如此：
+
+```bash
+python -m pip install -r requirements.lock
+```
+
+`scripts/check_lock.py` 会校验锁定仍满足 `requirements.txt` 的每个下界，防止「改了声明忘了更新锁定」
+导致 CI 静默沿用旧版本。CI 与本地都可运行：
+
+```bash
+python scripts/check_lock.py
+```
+
+**重新生成锁定**（在有意升级依赖后）：
+
+```bash
+python -m pip freeze
+```
+
+然后把输出写进 `requirements.lock`，并**手工处理两处**（脚本的头部注释也写了）：
+
+- 删掉本项目自身的可编辑安装行（`-e git+…`）——CI 是直接 checkout 代码的
+- conda 提供的包会被 pip 记成 `name @ file:///home/conda/…`，**不可在别处安装**，
+  要改写成正常的 `name==版本号`（生成时 `packaging` 就是这样一条）
+
+Python 本身与 Tcl/Tk 不由锁文件管：它们来自 conda，而 conda-forge 的 `python`
+声明了 `tk` 依赖，所以 CI 里 `setup-miniconda` 会提供与本地相同的
+`Library\lib\tcl8.6` 布局。
+
 ## 自动发布（GitHub Actions）
 
 `.github/workflows/release.yml`：推送 `v*` 标签时自动构建便携包并创建 Release。

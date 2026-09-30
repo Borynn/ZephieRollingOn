@@ -43,6 +43,8 @@ License: non-commercial only (`LICENSE`)
 | `assets/ui/zehpie_window_icon.ico` | Exe icon, embedded by `build_portable.ps1` |
 | `environment.yml` | Conda env `zephie_rolling_on` |
 | `pyproject.toml` / `requirements.txt` | Packaging + dependencies |
+| `requirements.lock` | Exact pins for reproducible builds (full tree incl. PyInstaller/setuptools); used by CI |
+| `scripts/check_lock.py` | Verify `requirements.lock` still satisfies every floor in `requirements.txt` |
 | `LICENSE` | MIT（含范围豁免：闭源 `.zm` 与第三方内容不在 MIT 内） |
 | `NOTICE` | 第三方署名、游戏素材版权声明、免责说明；随分发包一起发出 |
 | `.github/workflows/release.yml` | 推 `v*` 标签自动构建便携包并创建 Release |
