@@ -1,0 +1,113 @@
+name: Release
+
+# Builds the portable Windows package and attaches it to a GitHub Release.
+#
+# Triggered by pushing a version tag (`v1.0.1`); the tag must match the version
+# hardcoded in scripts/build_portable.ps1, otherwise the job fails early rather
+# than publishing a mislabelled artifact.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write  # required to create the release and upload the asset
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Python 3.11 on purpose: the bundled native engine is a `cp311` extension
+      # (`vela_official*.cp311-win_amd64.pyd`), which cannot be imported by any
+      # other Python version. A `cp312` build would fail at runtime, not here.
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install "pyinstaller>=6.0"
+
+      # A tag/script mismatch would publish an artifact whose name and contents
+      # disagree; catch it before spending build minutes.
+      - name: Verify tag matches the build script version
+        shell: pwsh
+        run: |
+          $declared = (Select-String -Path scripts\build_portable.ps1 -Pattern '^\$Version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          Write-Host "build script version: $declared"
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $tag = "${{ github.ref_name }}".TrimStart("v")
+            if ($tag -ne $declared) {
+              throw "tag v$tag does not match scripts/build_portable.ps1 version $declared"
+            }
+          }
+          "VERSION=$declared" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # Fails fast (and legibly) if a required runtime component is missing from
+      # the tree; otherwise the breakage would only show up in a user's install.
+      - name: Verify bundled runtime components
+        shell: pwsh
+        run: |
+          $required = @(
+            "model_host.exe",
+            "native/vela/vela_official.cp311-win_amd64.pyd",
+            "native/vela/vela_official_v41.cp311-win_amd64.pyd",
+            "map.xlsx", "LICENSE", "NOTICE",
+            "docs/USER_README_ZH.txt",
+            "decision_models/vela_v4.1.vpk",
+            "decision_models/zephie_m1_points.zm"
+          )
+          $missing = $required | Where-Object { -not (Test-Path $_) }
+          if ($missing) { throw "missing required files: $($missing -join ', ')" }
+          Write-Host "all $($required.Count) required components present"
+
+      - name: Build portable package
+        shell: pwsh
+        run: ./scripts/build_portable.ps1
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $dir = "dist/ZephieRollingOn_v$env:VERSION"
+          if (-not (Test-Path $dir)) { throw "build output not found: $dir" }
+          $zip = "ZephieRollingOn_v$env:VERSION.zip"
+          Compress-Archive -Path $dir -DestinationPath $zip -CompressionLevel Optimal
+          $mb = [math]::Round((Get-Item $zip).Length / 1MB, 1)
+          Write-Host "created $zip ($mb MB)"
+          "ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZephieRollingOn_v${{ env.VERSION }}
+          path: ${{ env.ZIP }}
+          if-no-files-found: error
+
+      - name: Create release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $notes = @"
+          便携版 ZephieRollingOn v$env:VERSION。
+
+          解压后运行 ``ZephieRollingOn!.exe``（会请求管理员权限，属正常现象：截屏与点击注入需要提权）。
+
+          已内置决策模型包：``vela_v4.1``、``m1_points``，无需另行下载。
+          其他模型（如 ``vela_v4``，约 1 GB）请从发布页单独获取后放入 ``decision_models/``。
+
+          交流 QQ 群：582530986
+          "@
+          gh release create $tag $env:ZIP --title "ZephieRollingOn v$env:VERSION" --notes $notes

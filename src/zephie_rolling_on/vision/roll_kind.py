@@ -1,4 +1,4 @@
-﻿"""Detect free / paid / START roll buttons via templates."""
+"""Detect free / paid / START roll buttons via templates."""
 
 from __future__ import annotations
 

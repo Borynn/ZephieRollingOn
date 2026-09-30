@@ -23,9 +23,12 @@ venv/
 # can run the closed models as-is. It is a compiled component, not source.
 !model_host.exe
 
-# Open-source packages are large (VELA is ~1 GB) and are published as release
-# attachments instead of being committed.
+# Open-source packages are large and are published as release attachments
+# instead of being committed.
+# EXCEPTION: the v4.1 package is small enough (~38 MB) to live in the repo, so a
+# plain clone gets it. `vela_v4.vpk` stays out at ~1 GB.
 decision_models/*.vpk
+!decision_models/vela_v4.1.vpk
 
 # Closed packages are tracked: they are small, and issue-able model updates are
 # just new files here. See README for the distribution model.
@@ -40,6 +43,11 @@ config/hotkeys.yaml
 # Per-user auto-click settings; factory defaults live in auto_click.default.yaml
 config/auto_click.yaml
 check_report.txt
+# 独立性门禁的私有词表：它本身就是敏感内容，绝不入库
+scripts/audit_terms.local.py
+# 界面「导出日志」的产物落在程序根目录（源码运行时即仓库根目录）。
+# 它含用户设置与窗口标题，属于支持材料，绝不入库。
+ZephieLog_v*.zip
 capture_test/
 data/printwindow_test/
 *.log

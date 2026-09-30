@@ -20,8 +20,10 @@ lucky_confirm:
   y: 518
 # 点卡槽→确认间隔：config/auto_click.yaml → click_interval_ms
 
-# 开关大冒险界面（客户区绝对坐标；postmessage 路径连点两次，替代 F12）
-# 启动/一键测试会模板匹配写回本坐标；检测配置见下方 toggle_adventure_ui_detect
+# 开关大冒险界面（游戏客户区绝对坐标；postmessage 路径连点两次，替代 F12）
+# 注意：跳过动画靠点击本坐标实现。该坐标由开关按钮模板匹配写回，而检测只在
+# 「格子识别失败自动重标」时执行；若窗口移动/改分辨率，坐标会失效且点击不会报错。
+# 检测配置见下方 toggle_adventure_ui_detect
 toggle_adventure_ui:
   x: 1629
   y: 1043

@@ -34,20 +34,20 @@ powershell -ExecutionPolicy Bypass -File scripts\build_portable.ps1
 
 需要分发 `.zm` 模型时，把 `model_host.exe` 放在项目根或 `dist/`，或用 `-ModelHostExe` 指定路径。
 
-输出目录：`dist/ZephieRollingOn_v0.9.3/`。
+输出目录：`dist/ZephieRollingOn_v<版本>/`（版本号取自 `scripts/build_portable.ps1`）。
 
 ## 分发方式
 
-把整个 `ZephieRollingOn_v0.9.3` 文件夹打成 zip 即可上传。
+把整个 `ZephieRollingOn_v<版本>` 文件夹打成 zip 即可上传。
 用户解压后应得到**一个文件夹**，里面有 `ZephieRollingOn!.exe` 与 `_internal/` 等；
 **不要**只抽出 exe 单独发。
 
 ```text
-ZephieRollingOn_v0.9.3/         # 解压后的根目录（名可自定）
+ZephieRollingOn_v<版本>/        # 解压后的根目录（名可自定）
   ZephieRollingOn!.exe          # 双击启动
   model_host.exe                # 解释 .zm 包的运行时组件
   _internal/                    # Python / 运行库（勿删）
-  native/vela/                  # 解释 .vpk 包的原生引擎
+  native/vela/                  # 解释 .vpk 包的原生引擎（v4 + v4.1 两个）
   config/                       # 默认配置（可被运行时改写）
   assets/                       # 模板与图标
   map.xlsx
@@ -58,7 +58,14 @@ ZephieRollingOn_v0.9.3/         # 解压后的根目录（名可自定）
   LICENSE
 ```
 
-模型包**不**打进分发包：用户另行下载后放进 `decision_models/`，在界面点「导入」即可。
+模型包**不再需要用户手动下载**：`vela_v4.1.vpk`（约 38 MB）与
+`zephie_m1_points.zm`（约 17 MB）已打进分发包，解压即可用。
+
+打包脚本会先清空 `decision_models/`，再只复制 `$BundleModels` 列出的包——
+这样源码目录里残留的其他包不会意外混进发布件。
+
+体积较大的模型（`vela_v4.vpk`，约 1 GB）仍按发布页单独提供，需要时放进
+`decision_models/` 后点「选择决策模型」导入。
 
 构建时会排除开发机上的**用户状态文件**（`config/` 下的 `auto_click.yaml`、
 `ui_geometry.yaml`、`game_window.yaml`、`planner_state.yaml`、`hotkeys.yaml`），
@@ -76,7 +83,22 @@ ZephieRollingOn_v0.9.3/         # 解压后的根目录（名可自定）
 | 模型包 | 只替换/新增 `decision_models/` 下的包，界面点「导入」 |
 | 脚本界面 | 用新压缩包覆盖解压目录（可保留用户已改的 `config/` 与已下的模型） |
 
+## 自动发布（GitHub Actions）
+
+`.github/workflows/release.yml`：推送 `v*` 标签时自动构建便携包并创建 Release。
+
+- Python **3.11**（`setup-python`）——必须与内置引擎的 `cp311` ABI 一致，
+  否则构建能过、运行时才失败
+- 先校验标签与 `scripts/build_portable.ps1` 里的 `$Version` 一致，避免发布名不符实的产物
+- 再校验运行时组件齐全（`model_host.exe`、两个引擎、`map.xlsx`、`LICENSE`、`NOTICE`、两个模型包）
+- 构建 → 打成 `ZephieRollingOn_v<版本>.zip` → 上传 artifact → 创建 Release 并附带 zip
+
+发布新版本：改好 `$Version`（以及 `pyproject.toml`、`__init__.py`）后打标签 `v<版本>` 并推送。
+
 ## 源码仓
 
-仓库不提交模型包（见 `.gitignore`）；模型包按发布页单独提供。
-`scripts/audit_independence.py` 可校验源码不引用任何私有内容。
+仓库不提交大模型包（见 `.gitignore`）；`vela_v4.1.vpk`（约 38 MB）随仓库分发，
+`vela_v4.vpk`（约 1 GB）按发布页单独提供。
+`scripts/audit_independence.py` 可校验源码不引用任何私有内容；它依赖一份
+**不入库**的词表 `scripts/audit_terms.local.py`，缺失时会跳过模式检查并正常退出
+（公开副本本就没有私有内容可泄漏）。

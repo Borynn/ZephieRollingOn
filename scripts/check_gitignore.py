@@ -28,8 +28,10 @@ CASES: list[tuple[str, bool]] = [
     ("ZephieRollingOn!.spec", True),
     ("map.xlsx.cache.json", True),
     ("src/zephie_rolling_on.egg-info/PKG-INFO", True),
-    # Source and the native engine must stay in.
+    # Source and the native engines must stay in. v4 and v4.1 are separate
+    # engines with different module names; both ship so both packages work.
     ("native/vela/vela_official.cp311-win_amd64.pyd", False),
+    ("native/vela/vela_official_v41.cp311-win_amd64.pyd", False),
     ("native/vela/README.md", False),
     ("src/zephie_rolling_on/decision_models/vela_package.py", False),
     ("src/zephie_rolling_on/__pycache__/x.cpython-311.pyc", True),

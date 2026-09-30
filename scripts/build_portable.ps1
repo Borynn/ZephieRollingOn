@@ -41,7 +41,7 @@ if ($cvFile -match "opencv.python" -and $cvFile -notmatch "headless") {
     if ($LASTEXITCODE -ne 0) { throw "opencv-python-headless install failed" }
 }
 
-$Version = "0.9.3"
+$Version = "1.0.1"
 $distName = "ZephieRollingOn!"
 $workDist = Join-Path $Root "dist\$distName"
 $outDir = Join-Path $Root "dist\ZephieRollingOn_v$Version"
@@ -188,6 +188,9 @@ if (Test-Path (Join-Path $Root "map_info.txt")) {
     Copy-Item -Force (Join-Path $Root "map_info.txt") $outDir
 }
 Copy-Item -Force (Join-Path $Root "LICENSE") $outDir
+# NOTICE carries the third-party attribution required when redistributing the
+# bundled model engines and the game-derived assets, so it ships with them.
+Copy-Item -Force (Join-Path $Root "NOTICE") $outDir
 
 $dm = Join-Path $outDir "decision_models"
 New-Item -ItemType Directory -Force -Path $dm | Out-Null
@@ -209,7 +212,10 @@ if ($ModelHostExe -and (Test-Path $ModelHostExe)) {
     Write-Warning "model_host.exe not found — .zm packages will not load"
 }
 
-# Open-source model engine: required to import .vpk packages.
+# Open-source model engines: required to import .vpk packages.
+# Two engines ship side by side (v4 `vela_official`, v4.1 `vela_official_v41`)
+# because their model formats are mutually exclusive and a package names the
+# engine it needs. The glob covers both; each is copied individually.
 $velaSrc = Join-Path $Root "native\vela"
 $velaDst = Join-Path $outDir "native\vela"
 $velaPyd = Get-ChildItem $velaSrc -File -ErrorAction SilentlyContinue |
@@ -224,23 +230,34 @@ if ($velaPyd) {
     Write-Warning "native/vela/vela_official*.pyd not found — .vpk models will not import"
 }
 
-# Model packages are NOT bundled: they are distributed separately and dropped
-# into decision_models/ by the user.
+# Model packages: the small ones ship inside the portable folder so users do not
+# have to download anything by hand; the big ones stay separate.
+#
+# Everything is stripped first, then only `$BundleModels` is copied back — that
+# way a leftover package in the source tree can never leak into a release by
+# accident.
+$BundleModels = @(
+    "vela_v4.1.vpk",       # ~38 MB, COMPACT48
+    "zephie_m1_points.zm"  # ~17 MB
+)
 Get-ChildItem $dm -File -ErrorAction SilentlyContinue |
     Where-Object { $_.Extension -in ".zm", ".vpk", ".dll", ".so", ".dylib" } |
     Remove-Item -Force
 
+foreach ($m in $BundleModels) {
+    $src = Join-Path $Root "decision_models\$m"
+    if (Test-Path $src) {
+        Write-Host "Bundling model package: $m"
+        Copy-Item -Force $src $dm
+    } else {
+        Write-Warning "model package not found, skipping: decision_models\$m"
+    }
+}
+
 Copy-Item -Force (Join-Path $Root "docs\USER_README_ZH.txt") (Join-Path $outDir "README_ZH.txt")
 
-# Standalone environment self-check; not run on normal startup.
-$checkBat = Join-Path $outDir "自检.bat"
-$batBody = @"
-@echo off
-cd /d "%~dp0"
-"$distName.exe" --check
-"@
-Set-Content -Path $checkBat -Value $batBody -Encoding Default
-Write-Host "Wrote self-check launcher: 自检.bat"
+# 自检不再单独发一个 自检.bat：环境自检已并入界面的「导出日志」（会生成一份
+# 自检报告放进 zip），既少一个入口，也避免用户单独跑自检时乱查窗口。
 
 # The intermediate PyInstaller output is not part of the deliverable.
 if (Test-Path $workDist) { Remove-Item -Recurse -Force $workDist }
@@ -248,4 +265,4 @@ if (Test-Path $workDist) { Remove-Item -Recurse -Force $workDist }
 $total = (Get-ChildItem $outDir -Recurse -File | Measure-Object Length -Sum).Sum
 Write-Host ""
 Write-Host ("Done: {0}  ({1:N1} MB)" -f $outDir, ($total / 1MB))
-Write-Host "Zip that folder. Model packages are distributed separately."
+Write-Host "Bundled model packages: $($BundleModels -join ', ')"

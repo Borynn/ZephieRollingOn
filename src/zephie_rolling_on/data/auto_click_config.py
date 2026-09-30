@@ -17,6 +17,8 @@ from zephie_rolling_on.paths import project_root
 
 from pathlib import Path
 
+import random
+
 import yaml
 
 PROJECT_ROOT = project_root()
@@ -30,6 +32,7 @@ _FALLBACK: dict = {
     "auto_replenish_dice": True,
     "block_mouse_in_game": False,
     "click_interval_ms": 100,
+    "click_interval_jitter_ms": 20,
     "same_cell_retry_after": 3,
 }
 
@@ -37,6 +40,13 @@ _FALLBACK: dict = {
 _DEFAULT_CLICK_INTERVAL_MS = 100
 _MIN_CLICK_INTERVAL_MS = 50
 _DEFAULT_SAME_CELL_RETRY_AFTER = 3
+
+# 点击间隔的随机扰动幅度（毫秒）。真人不会每次都用同一个间隔，固定间隔本身
+# 就是一种可识别的规律。
+# 可改 config/auto_click.yaml 的 click_interval_jitter_ms（**未做界面**，改完重启生效）；
+# 置 0 即完全关闭扰动。
+_DEFAULT_CLICK_INTERVAL_JITTER_MS = 20
+_MAX_CLICK_INTERVAL_JITTER_MS = 1000
 
 # Fallback yaml keys if click_interval_ms is absent (read-only).
 _LEGACY_INTERVAL_KEYS = (
@@ -100,6 +110,105 @@ def load_click_interval_ms(path: Path | None = None) -> float:
 
 def load_click_interval_sec(path: Path | None = None) -> float:
     return load_click_interval_ms(path) / 1000.0
+
+
+def _effective_base_ms(base_ms: float) -> float:
+    """归一化基准：非正数表示「不等待」，正数则不低于下限 50。
+
+    必须在函数内部夹紧，而不是依赖调用方先夹：否则某个调用点传入未夹紧的值
+    （如 30）会算出 10~30ms，**击穿 50ms 下限**。
+    """
+    base = float(base_ms)
+    if base <= 0:
+        return 0.0
+    return max(float(_MIN_CLICK_INTERVAL_MS), base)
+
+
+def _clamp_click_interval_jitter_ms(ms: float) -> float:
+    """扰动幅度夹紧到 ``[0, 1000]``；0 表示关闭扰动。"""
+    return min(max(0.0, float(ms)), float(_MAX_CLICK_INTERVAL_JITTER_MS))
+
+
+def load_click_interval_jitter_ms(path: Path | None = None) -> float:
+    """点击间隔的随机扰动幅度（毫秒），0~1000，0 表示不加扰动。
+
+    优先 RuntimeState（每次点击都会调用，走内存避免读 yaml），再读 yaml，
+    最后回落到默认 20。**未做界面**：改 config/auto_click.yaml 后需重启生效，
+    与 ``click_interval_ms`` 一致。
+    """
+    if path is None:
+        from zephie_rolling_on.app.runtime_state import get_runtime
+
+        rt = get_runtime()
+        if rt is not None:
+            val = getattr(rt, "click_interval_jitter_ms", None)
+            if val is not None:
+                try:
+                    return _clamp_click_interval_jitter_ms(float(val))
+                except (TypeError, ValueError):
+                    pass
+    raw = load_auto_click_config(path).get("click_interval_jitter_ms")
+    if raw is None:
+        raw = _DEFAULT_CLICK_INTERVAL_JITTER_MS
+    try:
+        return _clamp_click_interval_jitter_ms(float(raw))
+    except (TypeError, ValueError):
+        return float(_DEFAULT_CLICK_INTERVAL_JITTER_MS)
+
+
+def _jitter_offset_ms(
+    base_ms: float, jitter_ms: float | None = None
+) -> tuple[float, float]:
+    """扰动的偏移量区间（毫秒），相对基准。入参需已过 :func:`_effective_base_ms`。
+
+    下界取 ``-min(扰动, 基准 - 50)``，而不是「算完再截断到 50」：
+    基准恰好为下限 50 时，``max(50, 50±20)`` 会把 30~50 全部压到 50，
+    约一半点击都精确落在 50ms —— 那本身又成了新规律。压缩下半区间后，
+    基准 50 的实际范围是 50~70 **且均匀**，上下界与截断写法完全一致。
+
+    ``jitter_ms`` 不传则按当前配置取；显式传入便于单测固定幅度。
+    """
+    jitter = max(
+        0.0,
+        load_click_interval_jitter_ms() if jitter_ms is None else float(jitter_ms),
+    )
+    lower = -min(jitter, max(0.0, float(base_ms) - float(_MIN_CLICK_INTERVAL_MS)))
+    return lower, jitter
+
+
+def jittered_click_interval_sec(base_sec: float | None = None) -> float:
+    """单次点击间隔（秒）：基准 ±20ms 随机，且不低于 50ms。
+
+    例：基准 100 → 80~120；基准 50 → 50~70（不是 30~70）。基准为 0 时返回 0，
+    保持旧的「0 = 不等待」语义。
+
+    **每次睡眠前都要重新调用。** 调用方若在循环外算一次再复用，同一批点击会
+    共用同一个扰动值，就失去意义了。``base_sec`` 用于复用已经读好的基准，
+    省掉重复读配置；不传则按当前 ``click_interval_ms`` 现取。
+    """
+    base_ms = _effective_base_ms(
+        load_click_interval_ms() if base_sec is None else float(base_sec) * 1000.0
+    )
+    if base_ms <= 0:
+        return 0.0
+    lower, upper = _jitter_offset_ms(base_ms)
+    return max(0.0, base_ms + random.uniform(lower, upper)) / 1000.0
+
+
+def click_interval_range_text(base_sec: float | None = None) -> str:
+    """实际间隔范围的可读文本（如 ``"80~120ms"``），供日志直接拼接。
+
+    入参与 :func:`jittered_click_interval_sec` **一致（秒，接同一个基准变量）**，
+    秒→毫秒的换算只在这里做一次。此前拆成「秒版随机 + 毫秒版范围」两个单位，
+    调用点极易把秒误传给毫秒参数，把范围显示错。
+    """
+    base_ms = _effective_base_ms(
+        load_click_interval_ms() if base_sec is None else float(base_sec) * 1000.0
+    )
+    if base_ms <= 0:
+        return "0ms"
+    lower, upper = _jitter_offset_ms(base_ms)
+    return f"{max(0.0, base_ms + lower):.0f}~{base_ms + upper:.0f}ms"
 
 
 def save_click_interval_ms(ms: float | int, path: Path | None = None) -> Path:
@@ -177,6 +286,31 @@ def load_skip_animation_via_f12(path: Path | None = None) -> bool:
         if rt is not None:
             return bool(rt.skip_animation_via_f12)
     return bool(load_auto_click_config(path).get("skip_animation_via_f12", True))
+
+
+# ---------------------------------------------------------------------------
+# 分辨率屏蔽
+# ---------------------------------------------------------------------------
+# 在该分辨率下「投骰/用卡后跳过动画」会出问题，运行时自动屏蔽。
+# 只作用于本次运行，不写盘，也不改动用户勾选状态：分辨率变回其它值即自动恢复。
+BLOCKED_SKIP_ANIMATION_SIZE = (1366, 768)
+
+_skip_animation_resolution_block = False
+
+
+def set_skip_animation_resolution_block(blocked: bool) -> None:
+    """由启动/一键测试根据当前游戏分辨率设置。"""
+    global _skip_animation_resolution_block
+    _skip_animation_resolution_block = bool(blocked)
+
+
+def skip_animation_blocked_by_resolution() -> bool:
+    return _skip_animation_resolution_block
+
+
+def skip_animation_effective(path: Path | None = None) -> bool:
+    """实际是否执行跳过动画：用户开关 且 未被分辨率屏蔽。"""
+    return bool(load_skip_animation_via_f12(path)) and not _skip_animation_resolution_block
 
 
 def save_skip_exclamation_reward(enabled: bool, path: Path | None = None) -> Path:

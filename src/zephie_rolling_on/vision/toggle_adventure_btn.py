@@ -1,4 +1,4 @@
-﻿"""Locate the adventure toggle button via expanding-box template match."""
+"""Locate the adventure toggle button via expanding-box template match."""
 
 from __future__ import annotations
 

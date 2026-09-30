@@ -1,4 +1,4 @@
-﻿"""Adventure frame auto-calibration from button templates."""
+"""Adventure frame auto-calibration from button templates."""
 
 from __future__ import annotations
 

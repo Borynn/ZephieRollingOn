@@ -16,6 +16,21 @@ _WGC_CAPTURE_LOCK = threading.Lock()
 # hwnd -> 长会话；多开时各窗口独立
 _SESSIONS: dict[int, "_WgcHwndSession"] = {}
 
+# 最近一次 WGC 取帧失败的原因。此前失败是**完全静默**的，于是用户报
+# 「走了桌面裁切/被遮挡」时无法判断 WGC 究竟卡在哪一步（会话创建、取帧超时、
+# 还是画面被判空），只能靠猜。
+_WGC_FAILURE_REASON = ""
+
+
+def wgc_failure_reason() -> str:
+    """最近一次 WGC 取帧失败的原因；成功或尚未调用时为空串。"""
+    return _WGC_FAILURE_REASON
+
+
+def _set_failure_reason(reason: str) -> None:
+    global _WGC_FAILURE_REASON
+    _WGC_FAILURE_REASON = reason
+
 
 def last_capture_method() -> str:
     return _LAST_CAPTURE_METHOD
@@ -144,6 +159,12 @@ class _WgcHwndSession:
         self._ready = threading.Event()
         self._closed = False
         self._control: CaptureControl | None = None
+        # 帧回调里转换失败的原文。此前被 `except Exception` 静默吞掉，导致
+        # 「帧到了但转换失败」与「一帧都没到（超时）」在下游完全无法区分，
+        # 只能一律报成超时——这会把人引向错误的方向。
+        self._callback_error = ""
+        # 累计到达的帧数（无论是否被请求），用于区分「没帧」与「帧为空」。
+        self._arrivals = 0
 
         capture = WindowsCapture(
             cursor_capture=False,
@@ -155,13 +176,16 @@ class _WgcHwndSession:
         def on_frame_arrived(frame: Frame, control: InternalCaptureControl) -> None:
             # 仅在有人请求时 copy，避免 60fps 全帧拷贝拖垮 CPU/内存带宽
             with self._frame_lock:
+                self._arrivals += 1
                 if not self._request:
                     return
                 try:
                     bgr = frame.convert_to_bgr().frame_buffer
                     self._latest = np.ascontiguousarray(bgr).copy()
-                except Exception:
+                    self._callback_error = ""
+                except Exception as exc:  # noqa: BLE001
                     self._latest = None
+                    self._callback_error = f"{type(exc).__name__}: {exc}"
                 self._request = False
                 self._ready.set()
 
@@ -172,6 +196,16 @@ class _WgcHwndSession:
 
         self._capture: WindowsCapture = capture
         self._control = capture.start_free_threaded()
+
+    @property
+    def callback_error(self) -> str:
+        """最近一次帧转换失败的原文；正常时为 ``""``。"""
+        return self._callback_error
+
+    @property
+    def arrivals(self) -> int:
+        """累计到达的帧数。用于判断「没收到帧」还是「收到的帧被判空」。"""
+        return self._arrivals
 
     @property
     def alive(self) -> bool:
@@ -237,15 +271,27 @@ def _get_or_create_session(hwnd: int) -> _WgcHwndSession | None:
         session.stop()
     try:
         session = _WgcHwndSession(key)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
+        _set_failure_reason(
+            f"创建 WGC 会话失败：{type(exc).__name__}: {exc}"
+        )
         return None
     _SESSIONS[key] = session
     return session
 
 
-def capture_window_wgc(hwnd: int, *, timeout_sec: float = 8.0) -> np.ndarray | None:
-    """Capture HWND via WGC; reuse the per-hwnd session when possible."""
+def capture_window_wgc(
+    hwnd: int, *, timeout_sec: float = 8.0, blank_retries: int = 2
+) -> np.ndarray | None:
+    """Capture HWND via WGC; reuse the per-hwnd session when possible.
+
+    ``blank_retries``：画面被判空时在**同一会话**内额外重取几次。判空多半是转场/
+    加载这类**瞬时**状态，而重建会话既要重做 ``GraphicsCaptureItem`` 转换、又更
+    容易失败，所以先原地重试更稳。
+    """
+    _set_failure_reason("")
     if not is_wgc_available():
+        _set_failure_reason("WGC 不可用（见 wgc_unsupported_reason）")
         return None
 
     import win32gui
@@ -253,25 +299,53 @@ def capture_window_wgc(hwnd: int, *, timeout_sec: float = 8.0) -> np.ndarray | N
     if not hwnd or not win32gui.IsWindow(hwnd):
         if hwnd:
             release_wgc_session(int(hwnd))
+        _set_failure_reason("窗口句柄无效或已失效")
         return None
 
     key = int(hwnd)
-    for attempt in range(2):
+    grabs_per_session = max(1, int(blank_retries) + 1)
+
+    for session_attempt in range(2):
         with _WGC_CAPTURE_LOCK:
             session = _get_or_create_session(key)
         if session is None:
             return None
 
-        # 取帧在锁外等待，避免与 release_wgc_session 死锁
-        img = session.grab(timeout_sec=timeout_sec)
-        if img is not None and _capture_image_usable(img):
-            _set_method("wgc")
-            return _crop_frame_to_client(img, hwnd)
+        frames_flowed = False
+        last_blank_mean = 0.0
+        for _ in range(grabs_per_session):
+            # 取帧在锁外等待，避免与 release_wgc_session 死锁
+            img = session.grab(timeout_sec=timeout_sec)
+            if img is None:
+                break
+            frames_flowed = True
+            if _capture_image_usable(img):
+                _set_method("wgc")
+                return _crop_frame_to_client(img, hwnd)
+            last_blank_mean = float(img.mean())
+
+        if frames_flowed:
+            # 能稳定取到帧，只是内容为空：这是**窗口内容**的问题，会话本身没坏，
+            # 重建没有意义，直接给出精确原因（不必再做第二次会话尝试）。
+            _set_failure_reason(
+                f"连续取到 {grabs_per_session} 帧但画面为空"
+                f"（灰度均值 {last_blank_mean:.1f}）；"
+                "可能是转场/加载画面、窗口最小化或独占全屏"
+            )
+            return None
+
+        # 一帧都没拿到：会话可能真的坏了，销毁后重建一次
+        err = session.callback_error
+        _set_failure_reason(
+            f"帧到达但转换失败：{err}"
+            if err
+            else f"等待帧超时（>{timeout_sec:g}s，累计到达 {session.arrivals} 帧）"
+        )
 
         with _WGC_CAPTURE_LOCK:
             if _SESSIONS.get(key) is session:
                 _SESSIONS.pop(key, None)
         session.stop()
-        if attempt == 0:
+        if session_attempt == 0:
             time.sleep(0.05)
     return None

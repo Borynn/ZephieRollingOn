@@ -56,17 +56,78 @@ def save_anchor(left: int, top: int, path: Path | None = None) -> Path:
             return ADVENTURE_FRAME_PATH
     p = path or ADVENTURE_FRAME_PATH
     p.parent.mkdir(parents=True, exist_ok=True)
+    left, top = int(left), int(top)
+
+    # Rewrite ONLY the two numbers inside `anchor:`.
+    #
+    # This used to regenerate the whole file from a fixed template, which silently
+    # deleted every other key in it — including the `auto_calib` block
+    # (search bounds, threshold, marker templates). `save_anchor` runs on every
+    # automatic re-calibration, so the factory config was destroyed the first
+    # time the anchor moved, and the loss was invisible because defaults exist.
+    if p.is_file():
+        try:
+            updated = _replace_anchor_values(
+                p.read_text(encoding="utf-8"), left, top
+            )
+        except (OSError, UnicodeDecodeError):
+            updated = None
+        if updated is not None:
+            p.write_text(updated, encoding="utf-8")
+            return p
+
+    # No file, or no `anchor:` block to update: write a minimal one.
     lines = [
         "# 大冒险界面框在游戏客户区中的左上角（「定位大冒险界面」确认后更新）",
         "# regions.yaml / click_targets.yaml 中的 left/top（或 x/y）为相对本锚点的偏移",
         "",
         "anchor:",
-        f"  left: {int(left)}",
-        f"  top: {int(top)}",
+        f"  left: {left}",
+        f"  top: {top}",
         "",
     ]
     p.write_text("\n".join(lines), encoding="utf-8")
     return p
+
+
+def _replace_anchor_values(text: str, left: int, top: int) -> str | None:
+    """Replace ``left``/``top`` under the top-level ``anchor:`` block only.
+
+    Returns ``None`` when there is no ``anchor:`` block, so the caller can fall
+    back to creating a fresh file. Everything outside that block — other keys,
+    blank lines and comments — is preserved byte for byte.
+    """
+    lines = text.splitlines()
+    start = None
+    for i, raw in enumerate(lines):
+        if raw.rstrip() == "anchor:":
+            start = i
+            break
+    if start is None:
+        return None
+
+    seen_left = seen_top = False
+    for i in range(start + 1, len(lines)):
+        line = lines[i]
+        stripped = line.strip()
+        # A non-indented, non-blank line ends the block.
+        if stripped and not line[:1].isspace():
+            break
+        key = stripped.split(":", 1)[0] if ":" in stripped else ""
+        if key == "left" and not seen_left:
+            lines[i] = f"  left: {left}"
+            seen_left = True
+        elif key == "top" and not seen_top:
+            lines[i] = f"  top: {top}"
+            seen_top = True
+
+    if not (seen_left and seen_top):
+        return None
+
+    out = "\n".join(lines)
+    if text.endswith("\n"):
+        out += "\n"
+    return out
 
 
 def _shift_box(box: dict[str, Any], dx: int, dy: int) -> dict[str, Any]:

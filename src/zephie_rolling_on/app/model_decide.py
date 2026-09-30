@@ -1,4 +1,4 @@
-﻿"""Decide via the imported decision model package."""
+"""Decide via the imported decision model package."""
 
 from __future__ import annotations
 

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from zephie_rolling_on.paths import project_root
 
+import datetime
 import queue
 import sys
 import threading
 import time
 import tkinter as tk
+from collections.abc import Callable
 from pathlib import Path
 from tkinter import scrolledtext
 
@@ -39,7 +41,7 @@ from zephie_rolling_on.ui.hotkey_config import (
 from zephie_rolling_on.ui.hotkey_listener import GlobalHotkeyManager
 from zephie_rolling_on.ui.hotkey_settings import open_hotkey_settings
 from zephie_rolling_on.ui.model_picker import open_model_picker
-from zephie_rolling_on.ui.notice_dialog import show_blocking_notice
+from zephie_rolling_on.ui.notice_dialog import guard_system_scale, show_blocking_notice
 from zephie_rolling_on.ui.ui_geometry import apply_saved_geometry, remember_window_geometry
 from zephie_rolling_on.ui.zehpie_theme import (
     RoundedButton,
@@ -158,6 +160,28 @@ def _dev_one_click_test_save_debug() -> bool:
     return bool(_load_yaml(DEV_CONFIG).get("one_click_test_save_debug", False))
 
 
+def _format_recognition_detail(
+    dice_rec: RecognitionResult,
+    cell_rec: RecognitionResult,
+    lucky_rec: RecognitionResult,
+) -> list[str]:
+    """识别结果的可读明细（一键测试用）。"""
+    lines = [
+        f"  格子：{cell_rec.cell_id}"
+        + (f"（原文 {cell_rec.raw_cell_text!r}）" if cell_rec.raw_cell_text else ""),
+        f"  骰子：剩余 {dice_rec.dice_remaining}"
+        + (f"（原文 {dice_rec.raw_dice_text!r}）" if dice_rec.raw_dice_text else ""),
+        f"  幸运卡：{len(lucky_rec.lucky_card_ids)} 张"
+        + (f" {lucky_rec.lucky_card_ids}" if lucky_rec.lucky_card_ids else ""),
+    ]
+    if lucky_rec.raw_lucky_text:
+        lines.append(f"  幸运卡原文：{lucky_rec.raw_lucky_text!r}")
+    for label, rec in (("格子", cell_rec), ("骰子", dice_rec), ("幸运卡", lucky_rec)):
+        if rec.notes:
+            lines.append(f"  {label}备注：{rec.notes}")
+    return lines
+
+
 class ControlPanel:
     def __init__(self) -> None:
         if sys.platform != "win32":
@@ -210,6 +234,7 @@ class ControlPanel:
             }
         )
         self._recognition_test_busy = False
+        self._exporting_logs = False
         self._auto_start_preparing = False
         self._advice_busy = False
         self._advice_loop_active = False
@@ -652,7 +677,7 @@ class ControlPanel:
         interval_row.pack(fill="x", pady=(6, 0))
         tk.Label(
             interval_row,
-            text="点击间隔(ms):",
+            text="点击间隔基准(ms):",
             anchor="w",
             bg=card,
             fg=muted,
@@ -700,14 +725,29 @@ class ControlPanel:
             pady=6,
         )
         log_wrap.pack(fill="both", expand=True)
+        log_head = tk.Frame(log_wrap, bg=card)
+        log_head.pack(fill="x")
         tk.Label(
-            log_wrap,
+            log_head,
             text="日志",
             anchor="w",
             bg=card,
             fg=_UI["accent_dark"],
             font=_UI["font_section"],
-        ).pack(anchor="w")
+        ).pack(side="left")
+        # 导出日志：只在脚本停止时可用（自检要真的截一张图，运行时导出会互相干扰）
+        self._btn_export_log = pack_round_btn(
+            log_head,
+            "导出日志",
+            self._export_logs,
+            side="right",
+            fill=None,
+            width=92,
+            height=24,
+            radius=8,
+            font=_UI["font_small"],
+            pady=0,
+        )
         self._text = scrolledtext.ScrolledText(
             log_wrap,
             height=12,
@@ -1019,16 +1059,61 @@ class ControlPanel:
         self._sync_recognition_test_buttons()
 
     def _sync_recognition_test_buttons(self) -> None:
-        """识别测试进行中，或自动点击运行中：禁用一键测试等按钮。"""
+        """识别测试进行中，或自动点击运行中：禁用一键测试与导出日志。"""
         running = self._session.is_running()
         busy = self._recognition_test_busy or self._auto_start_preparing or running
         state = "disabled" if busy else "normal"
         for name in ("_btn_test_all",):
             if hasattr(self, name):
                 getattr(self, name).config(state=state)
+        # 导出日志会现场跑自检（含实际截屏），运行时导出会与脚本抢游戏窗口
+        export_busy = busy or self._session.is_stopping() or self._exporting_logs
+        if hasattr(self, "_btn_export_log"):
+            self._btn_export_log.config(
+                state="disabled" if export_busy else "normal"
+            )
+
+    def _export_logs(self) -> None:
+        """把日志、环境自检报告、环境信息和配置快照打成一个 zip 放到程序目录。
+
+        只在脚本停止后可用：自检会真的截一张图并绑定窗口，运行中导出会和脚本
+        抢同一个游戏窗口，两边的识别都会受影响。
+        """
+        if self._exporting_logs:
+            return
+        if (
+            self._session.is_running()
+            or self._session.is_stopping()
+            or self._auto_start_preparing
+            or self._recognition_test_busy
+        ):
+            self._append_log("[导出日志] 请先停止脚本（等按钮恢复为「启动」），再导出日志。")
+            return
+
+        log_text = self._text.get("1.0", "end").rstrip("\n") + "\n"
+        self._exporting_logs = True
+        self._sync_recognition_test_buttons()
+        self._append_log("[导出日志] 开始整理日志并运行环境自检…")
+
+        from zephie_rolling_on.ui.log_export import LogExportDialog
+
+        LogExportDialog(
+            self.root,
+            log_text,
+            on_log=self._append_log,
+            on_closed=self._on_log_export_closed,
+        )
+
+    def _on_log_export_closed(self) -> None:
+        self._exporting_logs = False
+        self._sync_recognition_test_buttons()
 
     def _test_all_recognition(self) -> None:
-        """整条识别流程：标定 → 卡池 → 骰子/格子/幸运卡。"""
+        """整条识别流程：标定 → 卡池 → 骰子/格子/幸运卡。
+
+        失败时输出尽量详细的排查信息（各阶段的具体原因），因为一键测试是
+        用户反馈问题的主要入口。
+        """
         if self._recognition_test_busy:
             self._append_log("识别测试进行中，请稍候…")
             return
@@ -1039,54 +1124,96 @@ class ControlPanel:
         tag = "一键测试"
         save_debug = _dev_one_click_test_save_debug()
         self._set_recognition_test_busy(True)
-        self._append_log(f"[{tag}] 开始：开关按钮→标定 → 卡池 → 骰子/格子/幸运卡")
+        self._append_log(f"[{tag}] 开始：标定 → 卡池 → 骰子/格子/幸运卡")
 
         def work() -> None:
+            def log(msg: str) -> None:
+                try:
+                    self.root.after(0, lambda m=msg: self._append_log(m))
+                except Exception:  # noqa: BLE001
+                    pass
+
             try:
                 with use_runtime(self._runtime):
-                    self._recognition_test_body(hwnd, save_debug, tag)
+                    self._recognition_test_body(hwnd, save_debug, tag, log)
             except Exception as exc:  # noqa: BLE001
+                import traceback
+
+                detail = traceback.format_exc().strip().splitlines()[-1]
                 self.root.after(
                     0,
-                    lambda e=exc: self._finish_recognition_test_error(
-                        f"{tag}异常：{type(e).__name__}: {e}"
+                    lambda e=exc, d=detail: self._finish_recognition_test_error(
+                        f"{tag}内部异常：{type(e).__name__}: {e}｜{d}"
                     ),
                 )
 
         threading.Thread(target=work, name="recognition-test-all", daemon=True).start()
 
-    def _recognition_test_body(self, hwnd: int, save_debug: bool, tag: str) -> None:
+    def _recognition_test_body(
+        self,
+        hwnd: int,
+        save_debug: bool,
+        tag: str,
+        log: "Callable[[str], None]",
+    ) -> None:
         """在工作线程内执行；失败原因通过 ``_finish_recognition_test_error`` 上报。"""
-        boot = run_adventure_bootstrap(int(hwnd), on_log=None)
+        # ---- 1) 分辨率检查 + 标定（1366×768 时跳过开关检测，其余分辨率照常）----
+        boot = run_adventure_bootstrap(
+            int(hwnd), on_log=None, skip_toggle_when_blocked=True
+        )
+        if boot.resolution_notice:
+            log(f"[跳过动画] {boot.resolution_notice}")
+
         if not boot.ok:
-            stage = "标定"
-            if "点击开关按钮失败" in (boot.message or ""):
-                stage = "开关按钮"
-            elif not boot.calib_ok:
-                stage = "标定"
-            elif not boot.toggle_ok:
-                stage = "开关按钮"
-            reason = boot.message or ""
+            lines = [
+                f"{tag}：标定失败",
+                f"  开关按钮：{boot.toggle_msg}",
+                f"  第1次标定：{boot.calib_msg}",
+            ]
+            if boot.calib_attempt >= 2:
+                lines.append(f"  尝试次数：{boot.calib_attempt}（含点击开关后重标）")
             self.root.after(
                 0,
-                lambda s=stage, r=reason, t=tag: self._finish_recognition_test_error(
-                    f"{t}：{s}出错｜{r}"
+                lambda t=tag, ls=lines: self._finish_recognition_test_error(
+                    "\n".join(ls)
                 ),
             )
             return
+
+        # 标定成功，但开关按钮没找到：标定按钮（道具兑换/排行）在画面上，开关按钮不在
+        # （常见于被其他界面盖住）。此时标定仍能成功，但跳过动画依赖该坐标，用旧坐标
+        # 点击会落在错误位置且不报错，所以明确告警——但不停下后续检测，让其余阶段
+        # 的诊断信息也能拿到。
+        if boot.toggle_checked and not boot.toggle_ok:
+            log(f"[{tag}] 警告：开关按钮检测失败（跳过动画将无法正常工作）")
+            log(f"  原因：{boot.toggle_msg}")
+            log("  影响：投骰/用卡后的跳过动画会点击旧坐标，可能落在错误位置且不报错")
+            log(
+                "  处理：确认游戏画面完整可见（开关按钮未被其他界面遮挡）后重试；"
+                "必要时在 config/click_targets.yaml 手动修正 toggle_adventure_ui"
+            )
+            log(f"[{tag}] 继续执行后续检测…")
+
+        # ---- 2) 卡池 ----
         regions = load_regions()
+        pool_lines: list[str] = []
         pool_result = scan_and_apply_deck_pool(
             int(hwnd),
             regions,
-            on_log=None,
+            on_log=lambda m: pool_lines.append(str(m)),
             save_debug=save_debug,
         )
         if pool_result is None:
+            detail = "\n".join(f"  {x}" for x in pool_lines) or "  （未产生诊断信息）"
             self.root.after(
                 0,
-                lambda t=tag: self._finish_recognition_test_error(f"{t}：卡池出错"),
+                lambda t=tag, d=detail: self._finish_recognition_test_error(
+                    f"{t}：卡池扫描失败\n{d}"
+                ),
             )
             return
+
+        # ---- 3) 截屏 + 识别 ----
         frame = capture_window_client(hwnd)
         if frame is None:
             from zephie_rolling_on.vision.capture import (
@@ -1103,14 +1230,23 @@ class ControlPanel:
                     ),
                 )
                 return
-            note = last_capture_failure_note() or ""
+            from zephie_rolling_on.vision.capture import windows_build, wgc_supported
+
+            note = last_capture_failure_note() or "未返回图像"
+            win = int(hwnd)
+            lines = [
+                f"{tag}：截屏失败",
+                f"  原因：{note}",
+                f"  截屏后端：{'WGC' if wgc_supported() else '桌面裁切'}"
+                f"（系统内部版本 {windows_build()}）",
+                f"  窗口句柄：{win}",
+            ]
             self.root.after(
                 0,
-                lambda t=tag, n=note: self._finish_recognition_test_error(
-                    f"{t}：截屏失败｜{n}" if n else f"{t}：截屏失败"
-                ),
+                lambda t=tag, ls=lines: self._finish_recognition_test_error("\n".join(ls)),
             )
             return
+
         inv_rec = recognize_inventory_dice(frame, regions)
         charge_rec = recognize_charge_dice(frame, regions)
         if save_debug:
@@ -1128,6 +1264,15 @@ class ControlPanel:
                 self._finish_all_recognition(d, c, l, t)
             ),
         )
+
+    def _recognition_detail_lines(
+        self,
+        dice_rec: RecognitionResult,
+        cell_rec: RecognitionResult,
+        lucky_rec: RecognitionResult,
+    ) -> list[str]:
+        """识别结果的可读明细，用于成功/失败两种输出。"""
+        return _format_recognition_detail(dice_rec, cell_rec, lucky_rec)
 
     def _finish_all_recognition(
         self,
@@ -1152,11 +1297,20 @@ class ControlPanel:
         lucky = format_owned_lucky_cards(lucky_rec.lucky_card_ids)
         self._update_owned_lucky_cards(lucky)
 
-        if dice_rec.dice_remaining is None or cell_rec.cell_id is None:
-            self._append_log(f"[{tag}] 骰子/格子/幸运卡出错")
+        detail = "\n".join(_format_recognition_detail(dice_rec, cell_rec, lucky_rec))
+
+        missing: list[str] = []
+        if dice_rec.dice_remaining is None:
+            missing.append("骰子")
+        if cell_rec.cell_id is None:
+            missing.append("格子")
+        if missing:
+            self._append_log(
+                f"[检测] {tag}：识别未通过（未识别出 {'、'.join(missing)}）\n{detail}"
+            )
             return
 
-        self._append_log(f"[{tag}] 完成")
+        self._append_log(f"[{tag}] 完成\n{detail}")
 
     def _show_occlusion_notice(self, headline: str) -> None:
         """画面被遮挡：弹窗提示并停止当前动作。"""
@@ -1170,7 +1324,10 @@ class ControlPanel:
 
     def _finish_recognition_test_error(self, message: str) -> None:
         self._set_recognition_test_busy(False)
-        self._append_log(f"[检测] {message}")
+        lines = str(message).splitlines() or [""]
+        self._append_log(f"[检测] {lines[0]}")
+        for extra in lines[1:]:
+            self._append_log(extra)
         self._refresh_calibration_labels()
 
     def _test_charge_dice(self) -> None:
@@ -1697,15 +1854,19 @@ class ControlPanel:
         self._text.config(state="normal")
         for msg in messages:
             start_index = self._text.index("end-1c")
-            self._text.insert("end", msg + "\n")
+            # 时间戳：排查时要和系统事件（如显卡驱动超时恢复）对时间，
+            # 没有时间戳就对不上，也无法判断"卡了一会儿"到底是多久。
+            line = f"{datetime.datetime.now().strftime('%H:%M:%S')} {msg}"
+            self._text.insert("end", line + "\n")
             line_tag = self._log_tag_for_message(msg)
             if line_tag:
                 self._text.tag_add(line_tag, start_index, f"{start_index} lineend")
-            pos = msg.find("推荐")
+            # 偏移量必须在**插入后的整行**上算（已含时间戳前缀），在 msg 上算会错位
+            pos = line.find("推荐")
             if pos != -1:
-                seg_end = msg.find(" | ", pos)
+                seg_end = line.find(" | ", pos)
                 if seg_end == -1:
-                    seg_end = len(msg)
+                    seg_end = len(line)
                 self._text.tag_add(
                     "recommend",
                     f"{start_index}+{pos}c",
@@ -1730,11 +1891,17 @@ class ControlPanel:
     def _on_auto_stopped(self) -> None:
         self.root.after(0, self._on_auto_stopped_ui)
 
-    def _on_auto_stopped_ui(self) -> None:
+    def _on_auto_stopped_ui(self, _retry: int = 0) -> None:
         self._disable_mouse_shield()
         self._sync_auto_click_buttons()
-        if self._session.stop_reason_kind == "occluded":
+        if self._session.take_stop_reason_kind() == "occluded":
             self._show_occlusion_notice("自动点击已停止")
+        # 循环内停止（如可用骰子为 0）会在工作线程里就通知界面，此时线程尚未退出，
+        # is_stopping() 仍为真，按钮会显示「停止中…」。线程真正结束后没有任何回调，
+        # 界面就永久卡在该状态（按停止热键可恢复，因为那条路径会 join 并重新同步）。
+        # 这里在仍处于停止中时短暂轮询，等线程退出后自动恢复按钮状态。
+        if self._session.is_stopping() and _retry < 25:
+            self.root.after(200, lambda: self._on_auto_stopped_ui(_retry + 1))
 
     def _read_rounds_target(self) -> int:
         try:
@@ -1775,7 +1942,10 @@ class ControlPanel:
             return
         with use_runtime(self._runtime):
             save_click_interval_ms(ms)
-        self._append_log(f"点击间隔已设为 {ms}ms（已写入 auto_click.yaml；下次启动后生效）")
+        self._append_log(
+            f"点击间隔基准已设为 {ms}ms（实际 {ms}±20ms，最低 50；"
+            "已写入 auto_click.yaml，下次启动后生效）"
+        )
 
     def _disable_mouse_shield(self) -> None:
         """停止时卸钩（默认不启用屏蔽；仅清理残留）。"""
@@ -1848,15 +2018,26 @@ class ControlPanel:
             pool_ok = False
             toggle_ok = False
             toggle_msg = ""
+            toggle_checked = False
             replenish_ok = True
             replenish_msg = ""
             try:
                 with use_runtime(self._runtime):
-                    boot = run_adventure_bootstrap(int(hwnd), on_log=None)
+                    boot = run_adventure_bootstrap(
+                        int(hwnd), on_log=None, skip_toggle_when_blocked=True
+                    )
                     calib_ok = bool(boot.ok)
                     calib_msg = boot.message
                     toggle_ok = bool(boot.toggle_ok)
                     toggle_msg = boot.toggle_msg
+                    toggle_checked = bool(boot.toggle_checked)
+                    if boot.resolution_notice:
+                        self.root.after(
+                            0,
+                            lambda n=boot.resolution_notice: self._append_log(
+                                f"[跳过动画] {n}"
+                            ),
+                        )
                     if not calib_ok:
                         self.root.after(
                             0,
@@ -1870,6 +2051,7 @@ class ControlPanel:
                                 pool_ok=False,
                                 toggle_ok=toggle_ok,
                                 toggle_msg=toggle_msg,
+                                toggle_checked=toggle_checked,
                                 replenish_ok=True,
                                 replenish_msg="",
                             ),
@@ -1898,6 +2080,7 @@ class ControlPanel:
                                     pool_ok=False,
                                     toggle_ok=toggle_ok,
                                     toggle_msg=toggle_msg,
+                                    toggle_checked=toggle_checked,
                                     replenish_ok=False,
                                     replenish_msg=replenish_msg,
                                 ),
@@ -1931,6 +2114,7 @@ class ControlPanel:
                     pool_ok=pool_ok,
                     toggle_ok=toggle_ok,
                     toggle_msg=toggle_msg,
+                    toggle_checked=toggle_checked,
                     replenish_ok=replenish_ok,
                     replenish_msg=replenish_msg,
                 ),
@@ -1950,17 +2134,33 @@ class ControlPanel:
         pool_ok: bool,
         toggle_ok: bool = False,
         toggle_msg: str = "",
+        toggle_checked: bool = False,
         replenish_ok: bool = True,
         replenish_msg: str = "",
     ) -> None:
         self._auto_start_preparing = False
-        _ = (calib_msg, pool_ok, toggle_ok, toggle_msg, replenish_msg)
+        _ = (calib_msg, pool_ok, toggle_msg, replenish_msg)
         self._sync_calibration_display()
         if self._calibration_dialog and self._calibration_dialog.winfo_exists():
             self._calibration_dialog.sync_from_file()
 
         if not calib_ok:
             self._append_log("[启动] 标定出错")
+            self._sync_auto_click_buttons()
+            return
+
+        # 跳动画（postmessage 模式）靠点击开关按钮坐标实现。检测失败时坐标仍是旧的，
+        # 点击会落在错误位置且不报错，因此启动阶段直接停止，避免带着坏坐标空跑。
+        if toggle_checked and not toggle_ok:
+            self._append_log("[启动] 开关按钮检测失败，已停止启动")
+            self._append_log(f"  原因：{toggle_msg}")
+            self._append_log(
+                "  影响：投骰/用卡后的跳过动画会点击旧坐标，可能落在错误位置且不报错"
+            )
+            self._append_log(
+                "  处理：确认游戏画面完整可见（开关按钮未被其他界面遮挡）后重试；"
+                "必要时在 config/click_targets.yaml 手动修正 toggle_adventure_ui"
+            )
             self._sync_auto_click_buttons()
             return
 
@@ -2042,4 +2242,8 @@ class ControlPanel:
 
 
 def run_app() -> None:
+    # 识图依赖逻辑坐标 == 物理像素：系统缩放不是 100% 时先拦下并提示，
+    # 用户点「确认」后直接关闭软件，不进入主界面。
+    if not guard_system_scale():
+        return
     ControlPanel().run()

@@ -1,78 +1,52 @@
-"""Audit the open-source project for private-context leakage.
+"""Check the published tree for private-context leakage.
 
-The project publishes both source and compiled runtime components, so this
-checks two things:
+Two things are checked:
 
-  A. Source text must know nothing about how a package is built or encrypted:
-     no research-repo paths, no internal model ids, no build pipeline names,
-     no crypto/obfuscation/signing vocabulary, no legacy DLL ABI.
+  A. **Source text** — published sources must not describe the internal packaging
+     pipeline or its internals.
+  B. **Committed binaries** — the shipped runtime components are published too,
+     so they must not carry private strings.
 
-  B. Committed binaries (the shipped runtime, the native engine) must not carry
-     private strings: no research-repo path, internal model ids, build pipeline
-     names, key file names, or local absolute paths.
-
-Crypto vocabulary is deliberately NOT banned from binaries: the shipped runtime
-is the compiled implementation, so it necessarily contains it.
+The banned-string list lives in ``scripts/audit_terms.local.py``, which is
+**gitignored on purpose**: the list is itself the sensitive part, so keeping it
+in a published file would defeat the check. Without that file the gate reports
+that the pattern rules were skipped and exits 0 — a fresh clone has nothing
+private to leak, so this degrades safely rather than blocking contributors.
 
   python scripts/audit_independence.py
 """
 
 from __future__ import annotations
 
+import importlib.util
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# Local, never-committed term list (see the module docstring).
+TERMS_PATH = ROOT / "scripts" / "audit_terms.local.py"
 
 # Directories that are not part of the shipped source.
 SKIP_DIRS = {
     ".git", "__pycache__", "build", "dist", ".venv", "venv",
     ".pytest_cache", ".mypy_cache", "data",
 }
-
-# Files that legitimately contain the patterns: this auditor defines them.
-SKIP_FILES = {
-    "scripts/audit_independence.py",
-    # Generated at runtime by the self-check; gitignored, never published.
-    "check_report.txt",
-}
 SKIP_SUFFIXES = {".egg-info", ".egg-link"}
 
-# (label, regex, why it matters)
-RULES: list[tuple[str, str, str]] = [
-    ("research repo path", r"AutomaticDiceRolling", "names the private repository"),
-    ("research build path", r"m1_decide|m1_distance|full_points", "names internal model ids"),
-    ("research toolchain", r"build_win_cpu|build_host\.ps1|build_m1_blackbox|build_vela_package",
-     "leaks the private build pipeline"),
-    ("container internals", r"RCDATA|res_id|RT_RCDATA|payload\.bin", "leaks package internals"),
-    ("crypto vocabulary", r"ChaCha|Poly1305|AEAD|encrypt|decrypt|cipher", "mentions encryption"),
-    ("obfuscation", r"obfuscat|mask_seed|mask_key|master\.key|shard|XOR", "mentions obfuscation"),
-    ("signing", r"ECDSA|sign_blob|signature bytes|verify_signature", "mentions signing"),
-    ("legacy dll path", r"dll_bridge|DllDecisionModel|dm_get_info|dm_import|dm_decide",
-     "exposes the legacy DLL ABI"),
-]
+SOURCE_SUFFIXES = {".py", ".ps1", ".md", ".txt", ".yml", ".yaml", ".toml", ".cfg"}
 
-# A few matches are legitimate; allow them explicitly with a reason.
-ALLOWLIST: dict[tuple[str, str], str] = {
-    ("src/zephie_rolling_on/decision_models/vela_package.py", "payload_bytes"):
-        "field name inside a public .vpk header",
-}
 
-# Committed binaries are published too, so scan them for private strings.
-BINARY_SUFFIXES = {".exe", ".pyd", ".dll", ".so", ".dylib"}
-
-# (label, regex, why it matters). Crypto vocabulary is intentionally absent:
-# the shipped runtime is the compiled implementation of it.
-BINARY_RULES: list[tuple[str, bytes, str]] = [
-    ("research repo path", rb"AutomaticDiceRolling", "names the private repository"),
-    ("internal model ids", rb"m1_distance|full_points|m1_decide|dice_adventure|zephie_",
-     "names internal model ids"),
-    ("research toolchain", rb"build_m1_blackbox|build_host|pack_model|gen_model_keys|m1_crypto|secure_forward|secure_engine|model_keys",
-     "leaks the private build pipeline"),
-    ("key material", rb"model_master|model_signing|kMasterBlob|kBlobMaskSeed",
-     "names key material"),
-    ("local absolute path", rb"[A-Za-z]:\\AI-Agent", "leaks a build-machine path"),
-]
+def _load_terms():
+    """Load the local term list, or ``None`` when it is absent."""
+    if not TERMS_PATH.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("_audit_terms_local", TERMS_PATH)
+    if spec is None or spec.loader is None:
+        return None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def iter_source() -> list[Path]:
@@ -84,17 +58,15 @@ def iter_source() -> list[Path]:
             continue
         if any(part.endswith(tuple(SKIP_SUFFIXES)) for part in p.parts):
             continue
-        rel = p.relative_to(ROOT).as_posix()
-        if rel in SKIP_FILES:
+        if p.name.endswith(".local.py"):
             continue
-        if p.suffix not in {".py", ".ps1", ".md", ".txt", ".yml", ".yaml", ".toml", ".cfg"}:
+        if p.suffix not in SOURCE_SUFFIXES:
             continue
         out.append(p)
     return sorted(out)
 
 
-def iter_binaries() -> list[Path]:
-    """Committed compiled artifacts (skips build/ dist/ vendored trees)."""
+def iter_binaries(binary_suffixes: set[str]) -> list[Path]:
     out: list[Path] = []
     for p in ROOT.rglob("*"):
         if not p.is_file():
@@ -103,28 +75,58 @@ def iter_binaries() -> list[Path]:
             continue
         if any(part.endswith(tuple(SKIP_SUFFIXES)) for part in p.parts):
             continue
-        if p.suffix.lower() in BINARY_SUFFIXES:
+        if p.suffix.lower() in binary_suffixes:
             out.append(p)
     return sorted(out)
 
 
-def main() -> int:
-    hits: list[tuple[Path, int, str, str, str]] = []
+def _scan_source(rules, allowlist) -> list[tuple[Path, int, str, str, str]]:
+    hits = []
     for p in iter_source():
         try:
             text = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        for label, pattern, why in RULES:
+        for label, pattern, why in rules:
             for m in re.finditer(pattern, text, re.IGNORECASE):
                 line_no = text[: m.start()].count("\n") + 1
                 line = text.splitlines()[line_no - 1].strip()
                 rel = p.relative_to(ROOT).as_posix()
-                if any(rel.endswith(k[0]) and k[1] in line for k in ALLOWLIST):
+                if any(rel.endswith(k[0]) and k[1] in line for k in allowlist):
                     continue
                 hits.append((p, line_no, label, why, line))
+    return hits
 
-    print(f"scanned {len(iter_source())} source files under {ROOT.name}\n")
+
+def _scan_binaries(files, rules) -> list[tuple[Path, str, str, str]]:
+    hits = []
+    for p in files:
+        try:
+            data = p.read_bytes()
+        except OSError:
+            continue
+        for label, pattern, why in rules:
+            for m in re.finditer(pattern, data):
+                hits.append((p, label, why, m.group(0)[:60].decode("latin1")))
+    return hits
+
+
+def main() -> int:
+    terms = _load_terms()
+
+    src_files = iter_source()
+    print(f"scanned {len(src_files)} source files under {ROOT.name}")
+
+    if terms is None:
+        print()
+        print(f"  NOTE: {TERMS_PATH.name} not found — pattern rules skipped.")
+        print("        That file is gitignored; a published clone has no private")
+        print("        strings to leak, so this is expected outside a dev checkout.")
+        print()
+        print("INDEPENDENCE_SKIPPED")
+        return 0
+
+    hits = _scan_source(terms.RULES, getattr(terms, "ALLOWLIST", {}))
     if not hits:
         print("no leaks found")
     else:
@@ -137,27 +139,16 @@ def main() -> int:
                 print(f"  {p.relative_to(ROOT)}:{ln}: {line[:100]}")
             print()
 
-    print(f"total findings: {len(hits)}")
-
-    # B. committed binaries
     print()
-    bins = iter_binaries()
+    bins = iter_binaries(terms.BINARY_SUFFIXES)
     print(f"scanned {len(bins)} committed binaries")
-    bin_hits: list[tuple[Path, str, str, str]] = []
-    for p in bins:
-        try:
-            data = p.read_bytes()
-        except OSError:
-            continue
-        for label, pattern, why in BINARY_RULES:
-            for m in re.finditer(pattern, data):
-                bin_hits.append((p, label, why, m.group(0)[:60].decode("latin1")))
+    bin_hits = _scan_binaries(bins, terms.BINARY_RULES)
     for p, label, why, sample in bin_hits:
         print(f"  {p.relative_to(ROOT)} [{label}] ({why}): {sample!r}")
     if not bin_hits:
         print("  no private strings in committed binaries")
-    print(f"binary findings: {len(bin_hits)}")
 
+    print()
     ok = not hits and not bin_hits
     print("INDEPENDENCE_OK" if ok else "INDEPENDENCE_FINDINGS")
     return 0 if ok else 1

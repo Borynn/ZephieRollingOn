@@ -1,4 +1,4 @@
-﻿"""Read available / charge dice counts from ROI via RapidOCR."""
+"""Read available / charge dice counts from ROI via RapidOCR."""
 
 from __future__ import annotations
 

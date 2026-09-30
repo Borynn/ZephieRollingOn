@@ -1,4 +1,4 @@
-﻿"""Save debug images for dimmed popup-button detection."""
+"""Save debug images for dimmed popup-button detection."""
 
 from __future__ import annotations
 

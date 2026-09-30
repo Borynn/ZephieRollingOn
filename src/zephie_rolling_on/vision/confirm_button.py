@@ -1,4 +1,4 @@
-﻿"""Find the reward confirm button (template match in search ROI)."""
+"""Find the reward confirm button (template match in search ROI)."""
 
 from __future__ import annotations
 

@@ -15,6 +15,7 @@ Container layout:
 
 from __future__ import annotations
 
+import importlib
 import json
 import struct
 import sys
@@ -34,8 +35,28 @@ from zephie_rolling_on.paths import project_root
 
 PKG_SUFFIX = ".vpk"
 
-# Fixed bundle size declared by the upstream VELA v4 model.
-VELA_MODEL_BYTES = 1096193164
+# Engine module used by packages that predate the `engine_module` hint.
+DEFAULT_ENGINE_MODULE = "vela_official"
+
+# Human-readable engine names for user-facing messages.
+#
+# A Python module name cannot contain a dot, so the v4.1 engine is
+# `vela_official_v41`; that identifier must never reach the user, or it reads as
+# a forty-release jump. Anything user-visible goes through `engine_label()`.
+ENGINE_LABELS: dict[str, str] = {
+    "vela_official": "VELA v4",
+    "vela_official_v41": "VELA v4.1",
+}
+
+# Payload sanity range for the UI gate.
+#
+# This used to be an equality check against v4's exact bundle size, which made
+# the gate reject every other VELA model. The native engine validates its own
+# header (magic, dimensions, exact size), so the UI only has to catch a
+# nonsensical declared length; a truncated file is caught by the file-size check
+# in `import_model`.
+MIN_PAYLOAD_BYTES = 1 << 20        # 1 MiB
+MAX_PAYLOAD_BYTES = 4 << 30        # 4 GiB
 
 # Unique instance ids 1..30 from the upstream card data, grouped by card id.
 # Public game data; kept local so this module depends on nothing private.
@@ -93,12 +114,27 @@ def _engine_state(module: Any) -> str:
     return ("（引擎状态：" + "，".join(parts) + "）") if parts else ""
 
 
-def _find_vela_module() -> Any | None:
-    """Import the native engine, searching the shipped locations."""
-    try:
-        import vela_official  # type: ignore
+def _engines_present(directory: Path, module_name: str) -> bool:
+    """Whether ``directory`` holds ``module_name``'s extension.
 
-        return vela_official
+    The pattern includes a literal dot on purpose: a plain ``vela_official*``
+    glob also matches the v4.1 engine (``vela_official_v41``), which would load
+    the wrong engine.
+    """
+    return any(directory.glob(f"{module_name}.*.pyd")) or any(
+        directory.glob(f"{module_name}.*.so")
+    )
+
+
+def _find_vela_module(module_name: str = DEFAULT_ENGINE_MODULE) -> Any | None:
+    """Import the requested native engine, searching the shipped locations.
+
+    v4 and v4.1 are separate engines under different module names (a process can
+    only import one module per name, and their model formats are mutually
+    exclusive), so the package decides which one to use via its header.
+    """
+    try:
+        return importlib.import_module(module_name)
     except ImportError:
         pass
 
@@ -111,16 +147,25 @@ def _find_vela_module() -> Any | None:
     for d in candidates:
         if not d.is_dir():
             continue
-        if any(d.glob("vela_official*.pyd")) or any(d.glob("vela_official*.so")):
+        if _engines_present(d, module_name):
             if str(d) not in sys.path:
                 sys.path.insert(0, str(d))
             try:
-                import vela_official  # type: ignore
-
-                return vela_official
+                return importlib.import_module(module_name)
             except ImportError:
                 continue
     return None
+
+
+def engine_module_for(header: Mapping[str, Any]) -> str:
+    """Engine module a package needs; older v4 packages predate the hint."""
+    name = str(header.get("engine_module") or "").strip()
+    return name or DEFAULT_ENGINE_MODULE
+
+
+def engine_label(module_name: str) -> str:
+    """User-facing name for an engine module (never the raw identifier)."""
+    return ENGINE_LABELS.get(module_name, module_name)
 
 
 def read_vpk_header(path: Path) -> tuple[dict[str, Any], int]:
@@ -193,20 +238,28 @@ class VelaPackageModel:
                 on_progress(int(pct), "")
 
         report(0)
-        module = _find_vela_module()
+        h = self._header
+        engine_module = engine_module_for(h)
+        module = _find_vela_module(engine_module)
         if module is None:
+            known = engine_module in ENGINE_LABELS
             return DecisionModelImportResult(
                 ok=False,
-                message="缺少原生推理引擎（native/vela），该模型无法导入",
+                message=(
+                    f"缺少「{engine_label(engine_module)}」的原生推理引擎，"
+                    "该模型无法导入。请更新软件后再试。"
+                    if known
+                    else "该模型包需要本版本未提供的推理引擎，无法导入。"
+                    f"请更新软件后再试。（引擎标识符 {engine_module}）"
+                ),
             )
         self._module = module
 
-        h = self._header
         busy_len = int(h.get("busy_png_bytes", 0))
         done_len = int(h.get("done_png_bytes", 0))
         payload_off = self._after_header + busy_len + done_len
         payload_len = int(h.get("payload_bytes", 0))
-        if payload_len != VELA_MODEL_BYTES:
+        if not (MIN_PAYLOAD_BYTES <= payload_len <= MAX_PAYLOAD_BYTES):
             return DecisionModelImportResult(
                 ok=False, message=f"载荷长度异常: {payload_len}"
             )
@@ -237,8 +290,8 @@ class VelaPackageModel:
             return DecisionModelImportResult(
                 ok=False,
                 message=(
-                    "内存不足：加载 VELA 需要约 2 GB 可用内存"
-                    "（模型 1.02 GB，加载过程会再占一份临时副本）。"
+                    "内存不足：加载该模型需要额外内存"
+                    f"（载荷约 {payload_len / (1 << 20):.0f} MB，加载过程会再占一份副本）。"
                     "请关闭其他程序后重试。"
                 ),
             )
@@ -252,7 +305,8 @@ class VelaPackageModel:
                 ok=False,
                 message=(
                     "原生引擎拒绝加载该包（load_model_from_file 返回 False）。"
-                    f"常见原因：可用内存不足（加载约需 2 GB）或文件损坏。{_engine_state(module)}"
+                    f"常见原因：载荷与该引擎不匹配（本包需要「{engine_label(engine_module)}」）"
+                    f"、内存不足或文件损坏。{_engine_state(module)}"
                 ),
             )
 
@@ -454,10 +508,13 @@ def _to_decision_result(
 
 
 __all__ = [
+    "DEFAULT_ENGINE_MODULE",
+    "ENGINE_LABELS",
     "PKG_SUFFIX",
     "TYPE_TO_UNIQUE_IDS",
-    "VELA_MODEL_BYTES",
     "VelaPackageError",
     "VelaPackageModel",
+    "engine_label",
+    "engine_module_for",
     "read_vpk_header",
 ]

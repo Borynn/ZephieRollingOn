@@ -32,11 +32,12 @@ def scan_and_apply_deck_pool(
 ) -> DeckPoolScanResult | None:
     """打开卡池 → 两轮已抽勾检测 → 覆盖写入 drawn_counts → 关闭卡池。
 
-    进度回调当前不输出：卡池扫描在正常流程里保持安静。
+    失败返回 ``None``；原因通过 ``on_log`` 上报（不传则保持安静）。
     """
-    del on_log
+    log: Callable[[str], None] = on_log or (lambda _m: None)
 
     if not hwnd:
+        log("[卡池] 未绑定游戏窗口")
         return None
 
     cfg = regions if regions is not None else load_regions()
@@ -45,8 +46,10 @@ def scan_and_apply_deck_pool(
     drag_from = targets.get("deck_pool_drag_from")
     drag_to = targets.get("deck_pool_drag_to")
     if not isinstance(toggle, dict) or toggle.get("x") is None:
+        log("[卡池] 缺少 click_targets.deck_pool_toggle")
         return None
     if not isinstance(drag_from, dict) or not isinstance(drag_to, dict):
+        log("[卡池] 缺少 deck_pool_drag_from / deck_pool_drag_to")
         return None
 
     root = cfg.get("deck_pool") if isinstance(cfg.get("deck_pool"), dict) else {}
@@ -56,11 +59,13 @@ def scan_and_apply_deck_pool(
 
     tx, ty = int(toggle["x"]), int(toggle["y"])
     if not click_client_game(int(hwnd), tx, ty):
+        log(f"[卡池] 打开列表点击失败 (客户区 {tx},{ty})")
         return None
     time.sleep(open_wait_sec)
 
     frame1 = capture_window_client(int(hwnd))
     if frame1 is None or frame1.size == 0:
+        log("[卡池] 第一轮截屏失败")
         click_client_game(int(hwnd), tx, ty)
         return None
     if save_debug:
@@ -75,12 +80,14 @@ def scan_and_apply_deck_pool(
 
     fx, fy = int(drag_from["x"]), int(drag_from["y"])
     tox, toy = int(drag_to["x"]), int(drag_to["y"])
-    # A failed drag still allows the second round to be attempted.
-    drag_client_game(int(hwnd), fx, fy, tox, toy)
+    # 拖拽失败仍尝试第二轮，避免整次扫描直接作废。
+    if not drag_client_game(int(hwnd), fx, fy, tox, toy):
+        log(f"[卡池] 拖拽列表失败 ({fx},{fy}) → ({tox},{toy})，仍尝试第二轮")
     time.sleep(after_drag_wait_sec)
 
     frame2 = capture_window_client(int(hwnd))
     if frame2 is None or frame2.size == 0:
+        log("[卡池] 第二轮截屏失败")
         click_client_game(int(hwnd), tx, ty)
         return None
     if save_debug:
@@ -94,6 +101,11 @@ def scan_and_apply_deck_pool(
         )
 
     result = scan_deck_pool_on_frames(frame1, frame2, cfg)
+    log(
+        f"[卡池] 命中 第1轮={result.round1_hit_count} 第2轮={result.round2_hit_count}"
+        f" 已抽合计={sum(result.drawn_counts.values())}"
+        f"（帧尺寸 {frame1.shape[1]}x{frame1.shape[0]}）"
+    )
     apply_deck_pool_scan_counts(result.drawn_counts)
 
     time.sleep(close_wait_sec)

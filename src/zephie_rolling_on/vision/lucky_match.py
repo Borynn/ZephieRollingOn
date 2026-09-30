@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from zephie_rolling_on.paths import project_root
 from zephie_rolling_on.vision.image_io import imread_unicode, imwrite_unicode

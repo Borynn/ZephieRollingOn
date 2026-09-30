@@ -1,7 +1,8 @@
 """python -m zephie_rolling_on.ui [--check]
 
 ``--check`` 运行独立环境自检（见 ``zephie_rolling_on.diagnose``）而不是启动界面。
-便携包里的 自检.bat 用这个入口。
+面向开发者/命令行排查；普通用户请用界面的「导出日志」，它会跑同一套自检并把
+报告打进 zip。
 """
 
 import sys

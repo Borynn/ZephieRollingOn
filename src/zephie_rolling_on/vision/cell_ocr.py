@@ -1,4 +1,4 @@
-﻿"""Cell-id OCR via bright-glyph connected components."""
+"""Cell-id OCR via bright-glyph connected components."""
 from __future__ import annotations
 
 from zephie_rolling_on.paths import project_root

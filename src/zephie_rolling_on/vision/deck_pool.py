@@ -1,4 +1,4 @@
-﻿"""Deck-pool drawn-mark detection (two-pass template match)."""
+"""Deck-pool drawn-mark detection (two-pass template match)."""
 
 from __future__ import annotations
 

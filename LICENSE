@@ -1,20 +1,52 @@
-Zephie Rolling On Non-Commercial License
+Zephie Rolling On — 许可 / License
+=================================
+
+本仓库以 **MIT 许可**发布（原文见下），但「许可范围」一节列出的例外内容
+**不在** MIT 许可范围内。使用本项目或其组件时，请保留版权与许可声明，
+即注明出处。
+
+---
+
+许可范围 / Scope
+----------------
+
+**适用 MIT 许可的内容**
+
+- `src/` 下的全部源代码
+- `scripts/` 下的全部脚本
+- `assets/` 下的本项目自绘素材（界面模板、图标等）
+- `config/` 下的配置模板
+- `docs/`、`README.md` 等文档
+- `model_host.exe`：本项目的运行时组件（编译产物，源码不另行提供）
+
+**不适用 MIT 许可的内容**
+
+- `decision_models/*.zm` —— **闭源模型包，保留所有权利**。允许通过本软件使用该
+  模型进行决策；**不允许**修改、反编译、提取其权重或再分发为其他产品的组件。
+  具体条款以该模型包随附的说明为准。
+- `native/vela/*.pyd` 与 `decision_models/*.vpk` —— **第三方开源项目**的内容，版权归
+  上游作者所有，按其自身许可发布（见 `NOTICE`）。本仓库仅做打包与薄封装。
+- 游戏相关的素材与数据（卡面图、界面模板、地图数据）—— 版权归游戏发行商所有，
+  仅作识别用途随附，见 `NOTICE` 中的说明。
+
+**第三方依赖**（Python 包等）按各自许可发布，详见 `requirements.txt` / `pyproject.toml`
+所列项目及其附带许可。
+
+---
+
+MIT License
+
 Copyright (c) 2026 Zephie Rolling On contributors
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to use,
-copy, modify, and share the Software for non-commercial purposes only, subject
-to the following conditions:
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
 
-1. Non-commercial use only. Selling the Software, charging for access or
-   distribution, or using the Software as part of a commercial product or
-   service is prohibited without prior written permission from the copyright
-   holders.
-2. The above copyright notice and this permission notice shall be included in
-   all copies or substantial portions of the Software.
-3. Decision model binaries (*.dll) redistributed with this project remain
-   subject to the same non-commercial restriction unless a separate license
-   is provided with that model.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -23,10 +55,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-中文摘要（以英文正文为准）：
-本软件仅允许非商业目的使用、复制、修改与分享。禁止出售、收费分发，或将本
-软件用于商业产品/服务（除非事先获得书面许可）。决策模型 DLL 若随本项目分发，
-同样禁止商用，除非该模型另有单独许可。

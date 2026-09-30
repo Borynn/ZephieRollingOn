@@ -100,7 +100,10 @@ def execute_replenish_clicks(
 ) -> bool:
     """打开补充界面 → 按 100/10/1 点够 → 确认。"""
     log = on_log or (lambda _m: None)
-    from zephie_rolling_on.data.auto_click_config import load_click_interval_sec
+    from zephie_rolling_on.data.auto_click_config import (
+        jittered_click_interval_sec,
+        load_click_interval_sec,
+    )
 
     targets = _load_targets()
     delay_sec = load_click_interval_sec()
@@ -113,23 +116,23 @@ def execute_replenish_clicks(
     if not _click_named(hwnd, targets, "replenish_dice_open", on_log=log):
         return False
     if delay_sec:
-        time.sleep(delay_sec)
+        time.sleep(jittered_click_interval_sec(delay_sec))
 
     for _ in range(n100):
         if not _click_named(hwnd, targets, "replenish_dice_btn_100", on_log=log):
             return False
         if delay_sec:
-            time.sleep(delay_sec)
+            time.sleep(jittered_click_interval_sec(delay_sec))
     for _ in range(n10):
         if not _click_named(hwnd, targets, "replenish_dice_btn_10", on_log=log):
             return False
         if delay_sec:
-            time.sleep(delay_sec)
+            time.sleep(jittered_click_interval_sec(delay_sec))
     for _ in range(n1):
         if not _click_named(hwnd, targets, "replenish_dice_btn_1", on_log=log):
             return False
         if delay_sec:
-            time.sleep(delay_sec)
+            time.sleep(jittered_click_interval_sec(delay_sec))
 
     if not _click_named(hwnd, targets, "replenish_dice_confirm", on_log=log):
         return False

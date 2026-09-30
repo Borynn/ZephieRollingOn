@@ -15,8 +15,14 @@ auto_replenish_dice: true
 # 脚本操作期间屏蔽游戏区鼠标输入（当前未启用；见 executor/mouse_shield.py）
 block_mouse_in_game: false
 
-# 统一点击间隔（毫秒），最低 50
+# 统一点击间隔基准（毫秒），最低 50
+# 实际间隔 = 基准 ±20ms 随机，且不低于 50（例：100 → 80~120；50 → 50~70）
 click_interval_ms: 100
+
+# 点击间隔的随机扰动幅度（毫秒），范围 0~1000，0 = 关闭扰动
+# 真人不会每次都用同一个间隔，固定间隔本身也是一种可识别的规律。
+# 本项没有界面，改这里后重启生效。
+click_interval_jitter_ms: 20
 
 # 操作后连续同格的次数达到该值，判定未点上并重放上次操作
 same_cell_retry_after: 3

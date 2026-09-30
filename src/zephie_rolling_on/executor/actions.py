@@ -9,8 +9,11 @@ from pathlib import Path
 import yaml
 
 from zephie_rolling_on.data.auto_click_config import (
+    click_interval_range_text,
+    jittered_click_interval_sec,
     load_click_interval_sec,
     load_skip_animation_via_f12,
+    skip_animation_effective,
 )
 from zephie_rolling_on.executor.interception_click import press_f12_interception
 from zephie_rolling_on.executor.win32_click import (
@@ -142,22 +145,22 @@ def _toggle_ui_to_skip_animation_body(
         if not ok:
             log(f"[跳过动画] F12 失败：{err}")
             return False
-        time.sleep(gap_sec)
+        time.sleep(jittered_click_interval_sec(gap_sec))
         ok, err = press_f12_interception(on_log=log)
         if not ok:
             log(f"[跳过动画] 第二次 F12 失败：{err}")
             return False
-        log(f"[跳过动画] 已 F12×2 开关界面（间隔 {gap_sec * 1000:.0f}ms）")
+        log(f"[跳过动画] 已 F12×2 开关界面（间隔 {click_interval_range_text(gap_sec)}）")
         return True
 
     if not _click_toggle_adventure_ui(hwnd, on_log=log):
         log("[跳过动画] 第一次点击开关界面失败")
         return False
-    time.sleep(gap_sec)
+    time.sleep(jittered_click_interval_sec(gap_sec))
     if not _click_toggle_adventure_ui(hwnd, on_log=log):
         log("[跳过动画] 第二次点击开关界面失败")
         return False
-    log(f"[跳过动画] 已点击开关界面×2（间隔 {gap_sec * 1000:.0f}ms）")
+    log(f"[跳过动画] 已点击开关界面×2（间隔 {click_interval_range_text(gap_sec)}）")
     return True
 
 
@@ -166,13 +169,14 @@ def _maybe_skip_animation_after_action(
     *,
     on_log: Callable[[str], None] | None = None,
 ) -> None:
-    if not load_skip_animation_via_f12():
+    # skip_animation_effective：用户开关 且 未被分辨率屏蔽（见 config 层）
+    if not skip_animation_effective():
         return
     log = on_log or (lambda _m: None)
     interval = load_click_interval_sec()
-    log(f"[跳过动画] click_interval_ms={interval * 1000:.0f}")
     if interval > 0:
-        time.sleep(interval)
+        log(f"[跳过动画] 前置等待 {click_interval_range_text(interval)}")
+        time.sleep(jittered_click_interval_sec(interval))
     toggle_ui_to_skip_animation(hwnd, on_log=log)
 
 
@@ -222,7 +226,7 @@ def use_lucky_card(
         return False
     delay_sec = load_click_interval_sec()
     if delay_sec > 0:
-        time.sleep(delay_sec)
+        time.sleep(jittered_click_interval_sec(delay_sec))
     ok = _click_target(
         hwnd, targets.get("lucky_confirm"), "lucky_confirm", log, quiet=True
     )
@@ -284,7 +288,8 @@ def _click_configured_sequence(
         ):
             any_ok = True
         if idx < len(seq):
-            time.sleep(delay_sec)
+            # 每次点击单独取扰动，同一批点击的间隔彼此不同
+            time.sleep(jittered_click_interval_sec(delay_sec))
     return any_ok
 
 
@@ -312,13 +317,14 @@ def start_new_round(
         time.sleep(pre_sec)
     elif skip_pre_wait:
         log("[新局] START 已出现，跳过预等待，立即点击…")
-    delay_ms = load_click_interval_sec() * 1000.0
+    delay_sec = load_click_interval_sec()
     any_ok = _click_configured_sequence(
         hwnd,
         clicks_key="new_round_clicks",
         min_clicks=2,
         log_start=(
-            f"[新局] 开始依次点击以开启新一轮（2 次，间隔 {delay_ms:.0f}ms）…"
+            "[新局] 开始依次点击以开启新一轮（2 次，间隔 "
+            f"{click_interval_range_text(delay_sec)}）…"
         ),
         name_prefix="new_round",
         on_log=log,
@@ -347,7 +353,8 @@ def skip_exclamation_reward(
         clicks_key="skip_exclamation_clicks",
         min_clicks=3,
         log_start=(
-            f"[感叹号格] 开始依次点击以跳过奖励（3 次，间隔 {delay_sec * 1000:.0f}ms）…"
+            "[感叹号格] 开始依次点击以跳过奖励（3 次，间隔 "
+            f"{click_interval_range_text(delay_sec)}）…"
         ),
         name_prefix="skip_exclamation",
         on_log=log,

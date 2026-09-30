@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from zephie_rolling_on.paths import project_root
 
@@ -26,14 +26,6 @@ from zephie_rolling_on.data.auto_click_config import (
 from zephie_rolling_on.executor import actions as executor_actions
 from zephie_rolling_on.models.map_board import MapBoard
 from zephie_rolling_on.app.model_decide import suggest_action_via_model
-
-def note_smart_roll_pending() -> None:
-    return None
-
-
-def reset_smart_switch_state() -> None:
-    return None
-
 
 from zephie_rolling_on.vision.capture import (
     capture_screen,
@@ -69,6 +61,12 @@ class ScriptSession:
     @property
     def stop_reason_kind(self) -> str:
         return self._stop_reason_kind
+
+    def take_stop_reason_kind(self) -> str:
+        """读取并清空停止原因，避免上一次的原因被后续停止重复消费。"""
+        kind = self._stop_reason_kind
+        self._stop_reason_kind = ""
+        return kind
 
     def __init__(
         self,
@@ -146,7 +144,6 @@ class ScriptSession:
         with use_runtime(self.runtime):
             # 必须在 runtime 下解析，否则大冒险锚点会读成共享 yaml
             self.regions = load_regions()
-            reset_smart_switch_state()
         self._local_hand = None
         self._last_acted_cell = None
         self._same_cell_streak = 0
@@ -838,7 +835,6 @@ class ScriptSession:
             ok = executor_actions.throw_normal_dice(self.hwnd, on_log=self.on_log)
             if ok:
                 _log_op(label or "普通投骰")
-                note_smart_roll_pending()
             return ok
         if action_id.startswith("use_"):
             card_id = str(payload.get("card_id") or action_id[len("use_") :])
@@ -854,8 +850,6 @@ class ScriptSession:
                 _log_op(label or f"使用 {card_id}")
                 if adjust_hand and self._local_hand and card_id in self._local_hand:
                     self._local_hand.remove(card_id)
-                if card_id.startswith("multiply_"):
-                    note_smart_roll_pending()
             return ok
         self.on_log(f"[操作] 未识别的动作 {action_id}，跳过")
         return False
@@ -891,7 +885,6 @@ class ScriptSession:
         self._last_action = None
         self._last_lucky_matches = []
         self._resume_replan = False
-        reset_smart_switch_state()
 
     def _request_stop_from_loop(self, reason: str, *, kind: str = "") -> None:
         """后台循环内请求停止（不 join，避免死锁）。

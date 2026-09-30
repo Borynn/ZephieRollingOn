@@ -1,9 +1,10 @@
 """独立自检：检查运行环境、依赖与资源是否满足运行要求。
 
-独立于脚本界面，**不随界面启动自动运行**。按需手动执行：
+**面向开发者**：普通用户不需要单独跑它——界面的「导出日志」会现场运行同一套
+自检，把报告打进 zip，用户只需发一个文件。按需手动执行：
 
     源码运行:  python -m zephie_rolling_on.diagnose
-    便携包:    双击 自检.bat
+    打包版:    ZephieRollingOn!.exe --check
 
 目标平台：Windows 10 / Windows 11，仅 64 位。
 
@@ -72,17 +73,31 @@ def _build_name(build: int) -> str:
 def check_windows() -> list[Check]:
     out: list[Check] = []
     try:
-        rel, ver, _csd, _ptype = platform.win32_ver()
-        build = int(platform.version().split(".")[-1])
+        # 与运行期的 windows_build() 同一来源，避免报告与门禁各算各的而产生分歧
+        from zephie_rolling_on.vision.capture import (
+            windows_build,
+            windows_build_source,
+        )
+
+        build = windows_build()
+        source = windows_build_source()
     except Exception as exc:  # noqa: BLE001
         return [Check(WARN, "Windows 版本", f"无法解析：{exc}")]
 
+    if build <= 0:
+        return [Check(WARN, "Windows 版本", "无法确定内部版本号")]
+
     name = _build_name(build)
+    origin = f"，来源 {source}" if source else ""
     if build >= WIN10_RTM_BUILD:
-        out.append(Check(OK, "系统版本", f"{name}（内部版本 {build}）"))
+        out.append(Check(OK, "系统版本", f"{name}（内部版本 {build}{origin}）"))
     else:
         out.append(
-            Check(FAIL, "系统版本", f"内部版本 {build} 低于 Windows 10，不受支持")
+            Check(
+                FAIL,
+                "系统版本",
+                f"内部版本 {build}{origin} 低于 Windows 10，不受支持",
+            )
         )
 
     if build < WGC_MIN_BUILD:
@@ -249,16 +264,22 @@ def check_resources() -> list[Check]:
 # Capture
 # ---------------------------------------------------------------------------
 
-def _find_test_window() -> int | None:
-    """挑一个可见、够大的窗口作为截屏测试对象（排除本工具自身）。"""
+def _test_window_candidates(limit: int = 6) -> list[int]:
+    """按面积从大到小列出可作截屏测试的窗口（排除本工具自身）。
+
+    WGC **无法捕获所有窗口**：资源管理器（``CabinetWClass``）这类窗口在转换
+    ``GraphicsCaptureItem`` 时会直接失败。所以不能只挑「最大的那个」就下结论——
+    否则自检最关键的取证行（实际截屏测试）反而成了误报来源。
+    调用方应对候选逐一尝试，任一成功即算通过。
+    """
     try:
         import win32gui
 
         from zephie_rolling_on.vision.win32_window import is_our_tool_window
     except Exception:
-        return None
+        return []
 
-    best = [0, 0]  # [area, hwnd]
+    found: list[tuple[int, int]] = []  # (area, hwnd)
 
     def _cb(hwnd: int, _extra) -> bool:
         try:
@@ -272,9 +293,7 @@ def _find_test_window() -> int | None:
             w, h = right - left, bottom - top
             if w < 640 or h < 480:
                 return True
-            area = w * h
-            if area > best[0]:
-                best[0], best[1] = area, int(hwnd)
+            found.append((w * h, int(hwnd)))
         except Exception:
             pass
         return True
@@ -282,14 +301,83 @@ def _find_test_window() -> int | None:
     try:
         win32gui.EnumWindows(_cb, None)
     except Exception:
+        return []
+    found.sort(reverse=True)
+    return [hwnd for _area, hwnd in found[: max(1, int(limit))]]
+
+
+def _bound_game_window() -> tuple[int, str] | None:
+    """读取界面绑定的游戏窗口（``config/game_window.yaml``），返回 ``(hwnd, 标题)``。
+
+    自检应该优先验证**用户真正在用的那个窗口**：只测任意大窗口时，可能挑中
+    WGC 根本无法捕获的类型（如资源管理器）而误报失败，也可能测了一个与游戏
+    毫无关系的窗口，让最关键的取证行失去意义。
+
+    读法与 ``RuntimeState.bootstrap_from_disk`` 保持一致：优先 ``capture_hwnd``
+    （多开时指向真正的捕获目标），再 ``hwnd``、``root_hwnd``。句柄必须仍然有效。
+    """
+    try:
+        import yaml
+
+        from zephie_rolling_on.paths import project_root
+
+        path = project_root() / "config" / "game_window.yaml"
+        if not path.is_file():
+            return None
+        with path.open(encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+        if not isinstance(raw, dict):
+            return None
+    except Exception:
         return None
-    return best[1] or None
+
+    try:
+        import win32gui
+    except Exception:
+        return None
+
+    for key in ("capture_hwnd", "hwnd", "root_hwnd"):
+        value = raw.get(key)
+        if not value:
+            continue
+        try:
+            hwnd = int(value)
+        except (TypeError, ValueError):
+            continue
+        try:
+            if hwnd and win32gui.IsWindow(hwnd):
+                return hwnd, str(raw.get("title") or "")
+        except Exception:
+            continue
+    return None
+
+
+def _capture_candidates() -> list[tuple[int, bool]]:
+    """截屏测试的目标窗口，``(hwnd, 是否绑定的游戏窗口)``。
+
+    游戏窗口排在最前：它的成败才是用户关心的结论。其余大窗口作为补充候选，
+    用来区分「这一个窗口不可捕获」与「截屏功能整体异常」。
+    """
+    out: list[tuple[int, bool]] = []
+    bound = _bound_game_window()
+    if bound is not None:
+        out.append((bound[0], True))
+    seen = {hwnd for hwnd, _ in out}
+    for hwnd in _test_window_candidates():
+        if hwnd not in seen:
+            seen.add(hwnd)
+            out.append((hwnd, False))
+    return out
 
 
 def check_capture() -> list[Check]:
     out: list[Check] = []
     try:
-        from zephie_rolling_on.vision.capture import windows_build, wgc_supported
+        from zephie_rolling_on.vision.capture import (
+            windows_build,
+            wgc_supported,
+            wgc_unsupported_reason,
+        )
 
         build = windows_build()
         if wgc_supported():
@@ -297,25 +385,29 @@ def check_capture() -> list[Check]:
                 Check(OK, "截屏后端", f"Windows Graphics Capture 可用（内部版本 {build}）")
             )
         else:
+            # 把真实原因写进报告：以前只说「无 WGC」，无法区分版本不足与导入失败
+            reason = wgc_unsupported_reason() or "原因未知"
             out.append(
                 Check(
                     OK,
                     "截屏后端",
-                    f"使用 GDI 桌面裁切（内部版本 {build} 无 Windows Graphics Capture）"
-                    "；需保持游戏窗口不被遮挡",
+                    f"无法使用 Windows Graphics Capture：{reason}；"
+                    "改用 GDI 桌面裁切，需保持游戏窗口不被遮挡",
                 )
             )
     except Exception as exc:  # noqa: BLE001
         out.append(Check(FAIL, "截屏后端", f"{type(exc).__name__}: {exc}"))
 
-    # 实测一次：真正截一张图，才算证据
-    hwnd = _find_test_window()
-    if not hwnd:
+    # 实测一次：真正截一张图，才算证据。
+    # 优先测**用户绑定的游戏窗口**——那才是用户关心的结论；其余大窗口作为补充，
+    # 用来区分「这一个窗口不可捕获」（如资源管理器）与「截屏功能整体异常」。
+    candidates = _capture_candidates()
+    if not candidates:
         out.append(
             Check(
                 WARN,
                 "实际截屏测试",
-                "未找到可用于测试的窗口（打开任意窗口后重试）",
+                "未找到可用于测试的窗口（先在界面绑定游戏窗口，或打开任意窗口后重试）",
             )
         )
         return out
@@ -323,33 +415,51 @@ def check_capture() -> list[Check]:
     try:
         import win32gui
 
-        title = win32gui.GetWindowText(hwnd) or "(无标题)"
-    except Exception:
-        title = "(未知)"
-
-    try:
         from zephie_rolling_on.vision.capture import (
             capture_window_client,
             last_capture_failure_note,
         )
         from zephie_rolling_on.vision.capture_wgc import last_capture_method
 
-        frame = capture_window_client(hwnd)
-        if frame is not None and getattr(frame, "size", 0) > 0:
-            h, w = frame.shape[:2]
-            out.append(
-                Check(OK, "实际截屏测试", f"用「{title}」测试，{last_capture_method()} 成功 {w}x{h}")
-            )
-        else:
-            note = last_capture_failure_note() or "未返回图像"
-            out.append(
-                Check(
-                    WARN,
-                    "实际截屏测试",
-                    f"用「{title}」测试失败：{note}"
-                    "（若游戏本身可正常识别，可忽略此项）",
+        failures: list[str] = []
+        game_failure = ""
+        for hwnd, is_game in candidates:
+            try:
+                title = win32gui.GetWindowText(hwnd) or "(无标题)"
+            except Exception:
+                title = "(未知)"
+            label = f"绑定的游戏窗口「{title}」" if is_game else f"「{title}」"
+            frame = capture_window_client(hwnd)
+            if frame is not None and getattr(frame, "size", 0) > 0:
+                h, w = frame.shape[:2]
+                level = OK
+                if game_failure:
+                    # 游戏窗口没截到、别的窗口却成功了 —— 说明是游戏窗口本身的问题
+                    level = WARN
+                out.append(
+                    Check(
+                        level,
+                        "实际截屏测试",
+                        f"用{label}测试，{last_capture_method()} 成功 {w}x{h}",
+                    )
                 )
+                if game_failure:
+                    out.append(
+                        Check(WARN, "游戏窗口截屏", f"绑定的游戏窗口未通过：{game_failure}")
+                    )
+                return out
+            note = last_capture_failure_note() or "未返回图像"
+            failures.append(f"{label}：{note}")
+            if is_game:
+                game_failure = note
+
+        out.append(
+            Check(
+                WARN,
+                "实际截屏测试",
+                f"试了 {len(candidates)} 个窗口都失败。" + "；".join(failures[:2]),
             )
+        )
     except Exception as exc:  # noqa: BLE001
         out.append(Check(FAIL, "实际截屏测试", f"{type(exc).__name__}: {exc}"))
 
@@ -398,12 +508,32 @@ def check_models() -> list[Check]:
     for name, reason in skipped:
         out.append(Check(WARN, f"模型包 {name}", f"加载失败，已跳过：{reason}"))
 
-    # VELA 原生引擎：进程内加载，缺失只影响 .vpk
+    # VELA 原生引擎：进程内加载，缺失只影响 .vpk。
+    # 两个引擎（v4 / v4.1）模块名不同、模型格式互斥，各自独立可用。
+    # 用户看到的是 engine_label()，不是模块标识符。
     try:
-        from zephie_rolling_on.decision_models.vela_package import _find_vela_module
+        from zephie_rolling_on.decision_models.vela_package import (
+            DEFAULT_ENGINE_MODULE,
+            ENGINE_LABELS,
+            _find_vela_module,
+            engine_label,
+        )
 
-        if _find_vela_module() is not None:
-            out.append(Check(OK, "VELA 原生引擎", "已可导入，.vpk 可用"))
+        available = [
+            engine_label(name)
+            for name in (DEFAULT_ENGINE_MODULE, *ENGINE_LABELS)
+            if _find_vela_module(name) is not None
+        ]
+        # 去重：同一 label 只报一次
+        available = list(dict.fromkeys(available))
+        if available:
+            out.append(
+                Check(
+                    OK,
+                    "VELA 原生引擎",
+                    "已可导入（" + "、".join(available) + "），对应 .vpk 可用",
+                )
+            )
         else:
             out.append(
                 Check(WARN, "VELA 原生引擎", "未找到；.vpk 模型不可用（.zm 不受影响）")
