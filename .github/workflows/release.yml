@@ -100,14 +100,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $tag = "${{ github.ref_name }}"
-          $notes = @"
-          便携版 ZephieRollingOn v$env:VERSION。
-
-          解压后运行 ``ZephieRollingOn!.exe``（会请求管理员权限，属正常现象：截屏与点击注入需要提权）。
-
-          已内置决策模型包：``vela_v4.1``、``m1_points``，无需另行下载。
-          其他模型（如 ``vela_v4``，约 1 GB）请从发布页单独获取后放入 ``decision_models/``。
-
-          交流 QQ 群：582530986
-          "@
+          # Built as an array, not a here-string: PowerShell requires a here-string
+          # terminator at column 0, which YAML indentation cannot satisfy.
+          # Backticks are avoided for the same reason (they escape in "")
+          # strings) -- 「」 carries the emphasis instead.
+          $notes = @(
+            "便携版 ZephieRollingOn v$env:VERSION。",
+            "",
+            "解压后运行 「ZephieRollingOn!.exe」 即可。启动时会请求管理员权限，",
+            "这是正常现象：截屏与点击注入需要提权，否则点击会被游戏静默丢弃。",
+            "",
+            "已内置决策模型包：vela_v4.1、m1_points，无需另行下载。",
+            "其他模型（如 vela_v4，约 1 GB）请从发布页单独获取后放入 decision_models/。",
+            "",
+            "交流 QQ 群：582530986"
+          ) -join "`n"
           gh release create $tag $env:ZIP --title "ZephieRollingOn v$env:VERSION" --notes $notes
