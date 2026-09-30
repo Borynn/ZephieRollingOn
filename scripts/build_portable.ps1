@@ -41,7 +41,17 @@ if ($cvFile -match "opencv.python" -and $cvFile -notmatch "headless") {
     if ($LASTEXITCODE -ne 0) { throw "opencv-python-headless install failed" }
 }
 
-$Version = "1.0.2"
+# 版本号单一来源：src/zephie_rolling_on/__init__.py 的 __version__。
+# 发版只改那一行——pyproject.toml 用 setuptools 的 attr 读同一个值，
+# CI 门禁也校验它与标签一致，三处不会再各自漂移。
+$versionFile = Join-Path $Root "src\zephie_rolling_on\__init__.py"
+if (-not (Test-Path $versionFile)) { throw "version source not found: $versionFile" }
+$versionMatch = Select-String -Path $versionFile -Pattern '^__version__\s*=\s*"([^"]+)"'
+if (-not $versionMatch) { throw "no __version__ assignment in $versionFile" }
+$Version = $versionMatch.Matches[0].Groups[1].Value
+if (-not $Version) { throw "empty __version__ in $versionFile" }
+Write-Host "Version (from __init__.py): $Version"
+
 $distName = "ZephieRollingOn!"
 $workDist = Join-Path $Root "dist\$distName"
 $outDir = Join-Path $Root "dist\ZephieRollingOn_v$Version"

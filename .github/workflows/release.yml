@@ -2,9 +2,9 @@ name: Release
 
 # Builds the portable Windows package and attaches it to a GitHub Release.
 #
-# Triggered by pushing a version tag (`v1.0.2`); the tag must match the version
-# hardcoded in scripts/build_portable.ps1, otherwise the job fails early rather
-# than publishing a mislabelled artifact.
+# Triggered by pushing a version tag (`v<version>`); the tag must match the
+# `__version__` in src/zephie_rolling_on/__init__.py, otherwise the job fails
+# early rather than publishing a mislabelled artifact.
 
 on:
   push:
@@ -77,15 +77,20 @@ jobs:
 
       # A tag/script mismatch would publish an artifact whose name and contents
       # disagree; catch it before spending build minutes.
-      - name: Verify tag matches the build script version
+      # Reads the single source of truth (the packaged `__version__`), so this
+      # validates the value that actually reaches the user, not a copy of it.
+      - name: Verify tag matches the app version
         shell: pwsh
         run: |
-          $declared = (Select-String -Path scripts\build_portable.ps1 -Pattern '^\$Version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
-          Write-Host "build script version: $declared"
+          $src = "src\zephie_rolling_on\__init__.py"
+          $m = Select-String -Path $src -Pattern '^__version__\s*=\s*"([^"]+)"'
+          if (-not $m) { throw "no __version__ assignment in $src" }
+          $declared = $m.Matches[0].Groups[1].Value
+          Write-Host "app version (from $src): $declared"
           if ("${{ github.ref_type }}" -eq "tag") {
             $tag = "${{ github.ref_name }}".TrimStart("v")
             if ($tag -ne $declared) {
-              throw "tag v$tag does not match scripts/build_portable.ps1 version $declared"
+              throw "tag v$tag does not match $src version $declared"
             }
           }
           "VERSION=$declared" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8

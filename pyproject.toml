@@ -4,11 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zephie-rolling-on"
-version = "1.0.2"
+# 版本号单一来源：src/zephie_rolling_on/__init__.py 的 __version__。
+# 发版只需改那一行；此处不再写死（setuptools 用 AST 静态解析，不 import 模块）。
+dynamic = ["version"]
 description = "Zephie Rolling On — game assist UI, recognition, auto-click, decision DLL client"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "Non-Commercial (see LICENSE)" }
+license = { text = "MIT (see LICENSE)" }
 authors = [{ name = "Zephie Rolling On contributors" }]
 dependencies = [
   "openpyxl>=3.1.0",
@@ -32,6 +34,9 @@ zephie-rolling-on = "zephie_rolling_on.ui:run_app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "zephie_rolling_on.__version__" }
 
 [tool.setuptools.package-data]
 zephie_rolling_on = ["py.typed"]

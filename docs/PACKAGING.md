@@ -131,12 +131,34 @@ Python 本身与 Tcl/Tk 不由锁文件管：它们来自 conda，而 conda-forg
   用 python.org 的解释器时那段会被静默跳过，应用就只能依赖 PyInstaller 自己的 hook。
   一个 `Report build environment` 步骤会把该布局打出来，便于日后定位。
 - Python **3.11**——必须与内置引擎的 `cp311` ABI 一致，否则构建能过、运行时才失败
-- 先校验标签与脚本里的 `$Version` 一致，避免发布名不符实的产物
+- 先校验标签与应用的 `__version__` 一致，避免发布名不符实的产物
 - 再校验运行时组件齐全（`model_host.exe`、两个引擎、`map.xlsx`、`LICENSE`、`NOTICE`、两个模型包）
 - 构建 → 打包 → **校验模型包确实进了产物** → 上传 artifact → 创建 Release 并附带 zip
 - 手动触发（`workflow_dispatch`）只构建与上传，不创建 Release，并会显式警告说明
 
-发布新版本：改好 `$Version`（以及 `pyproject.toml`、`__init__.py`）后打标签 `v<版本>` 并推送。
+## 版本号：单一来源
+
+版本号只写在**一处**：`src/zephie_rolling_on/__init__.py` 的 `__version__`。
+
+发版流程因此简化为：**改那一行 → 打标签 `v<版本>` → 推送**。
+
+各个消费者都读同一个值，不需要手工同步：
+
+| 消费者 | 怎么拿到 |
+|---|---|
+| 运行时界面 / 导出日志 | 直接就是该模块属性 |
+| `pyproject.toml`（pip 元数据） | `dynamic = ["version"]` + `attr = "zephie_rolling_on.__version__"`（setuptools 用 AST 静态解析，不 import 模块） |
+| `scripts/build_portable.ps1` | `Select-String` 正则读取该行（零依赖） |
+| CI 门禁 | 同一正则，校验它与标签一致 |
+
+**为什么不放进 yaml**：PowerShell 5.1 **没有内置 YAML 解析**（`ConvertFrom-Yaml` 不存在，需装
+`powershell-yaml`），而 setuptools 的 `dynamic.version` **只支持 `attr` 或 `file`**、不支持从
+yaml 取键。放 yaml 会让打包脚本要么多一个依赖、要么把 yaml 当纯文本用正则硬敲，反而更绕。
+
+### 改版本号时要留意
+
+- **不要再往 `pyproject.toml` 写 `version =`**：它已改为 `dynamic`，同时写会被 setuptools 拒绝。
+- `README.md` 与 `release.yml` 的注释**刻意不写具体版本号**——它们没有消费者，写了只会过期。
 
 ## 源码仓
 

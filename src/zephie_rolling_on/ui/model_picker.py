@@ -39,7 +39,17 @@ class ModelPickerDialog(tk.Toplevel):
         self._ui = make_ui()
         self.title("选择决策模型")
         self.configure(bg=self._ui["bg"])
-        self.transient(master)
+        # 先还原最小化的主窗，否则本窗口按 master 坐标居中会落到屏幕外
+        # （最小化时 rootx/rooty 为 -32000），而它随后 grab_set 会让界面不可点。
+        # 主窗刚由最小化还原时不设 transient：否则窗口会被 withdraw（不可见）。
+        from zephie_rolling_on.ui.ui_geometry import (
+            ensure_master_visible,
+            should_set_transient,
+        )
+
+        restored = ensure_master_visible(master)
+        if should_set_transient(master, restored=restored):
+            self.transient(master)
         self.resizable(False, False)
         self._on_imported = on_imported
         self._on_log = on_log or (lambda _m: None)
@@ -63,20 +73,19 @@ class ModelPickerDialog(tk.Toplevel):
         except tk.TclError:
             pass
         self.focus_set()
+        # 再定位一次：focus/grab 类调用可能让窗口管理器丢掉先前请求的位置。
+        self._center_on_master(master)
 
     def _center_on_master(self, master: tk.Misc) -> None:
-        self.update_idletasks()
-        w, h = self.winfo_width(), self.winfo_height()
-        try:
-            mx = master.winfo_rootx()
-            my = master.winfo_rooty()
-            mw = master.winfo_width()
-            mh = master.winfo_height()
-            x = mx + max(0, (mw - w) // 2)
-            y = my + max(0, (mh - h) // 2)
-        except tk.TclError:
-            x, y = 120, 100
-        self.geometry(f"+{x}+{y}")
+        """屏幕居中。见 ``ui_geometry.center_on_screen``。
+
+        方法名保留（调用点不变），但已改为屏幕居中：主窗最小化时 ``rootx/rooty``
+        为 -32000，按 master 居中的弹窗会落到屏幕外，而它已 ``grab_set()``，用户
+        既看不到弹窗又点不动界面。
+        """
+        from zephie_rolling_on.ui.ui_geometry import center_on_screen
+
+        center_on_screen(self, y_divisor=2)
 
     def _build(self) -> None:
         ui = self._ui

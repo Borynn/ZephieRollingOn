@@ -38,7 +38,17 @@ class ModelImportProgressDialog(tk.Toplevel):
         super().__init__(master)
         self.title("模型导入")
         self.configure(bg=_UI["bg"])
-        self.transient(master)
+        # 先还原最小化的主窗，否则本窗口按 master 坐标居中会落到屏幕外
+        # （最小化时 rootx/rooty 为 -32000），而它随后 grab_set 会让界面不可点。
+        # 主窗刚由最小化还原时不设 transient：否则窗口会被 withdraw（不可见）。
+        from zephie_rolling_on.ui.ui_geometry import (
+            ensure_master_visible,
+            should_set_transient,
+        )
+
+        restored = ensure_master_visible(master)
+        if should_set_transient(master, restored=restored):
+            self.transient(master)
         self.resizable(False, False)
         self._model = model
         self._on_finished = on_finished
@@ -79,19 +89,22 @@ class ModelImportProgressDialog(tk.Toplevel):
             self.grab_set()
         except tk.TclError:
             pass
+        # 再定位一次：focus/grab 类调用可能让窗口管理器丢掉先前请求的位置。
+        self._center(master)
 
         if not self._preview_mode:
             threading.Thread(target=self._worker, name="dm-import", daemon=True).start()
 
     def _center(self, master: tk.Misc) -> None:
-        self.update_idletasks()
-        w, h = max(self.winfo_width(), 560), max(self.winfo_height(), 280)
-        try:
-            x = master.winfo_rootx() + max(0, (master.winfo_width() - w) // 2)
-            y = master.winfo_rooty() + max(0, (master.winfo_height() - h) // 2)
-        except tk.TclError:
-            x, y = 160, 160
-        self.geometry(f"{w}x{h}+{x}+{y}")
+        """屏幕居中偏上。见 ``ui_geometry.center_on_screen``。
+
+        用屏幕坐标而非 ``master`` 坐标：主窗最小化时 ``rootx/rooty`` 为 -32000，
+        按 master 居中的弹窗会落到屏幕外，而它已 ``grab_set()``，用户既看不到
+        弹窗又点不动界面。``master`` 参数保留仅为签名兼容。
+        """
+        from zephie_rolling_on.ui.ui_geometry import center_on_screen
+
+        center_on_screen(self)
 
     def _read_embedded_art(self, which: str) -> bytes | None:
         pkg = self._model.package

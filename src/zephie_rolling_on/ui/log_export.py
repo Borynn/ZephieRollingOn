@@ -209,16 +209,24 @@ class LogExportDialog:
         self._error = ""
         self._closed = False
 
+        # 先还原最小化的主窗，否则本窗口按 master 坐标居中会落到屏幕外
+        # （最小化时 rootx/rooty 为 -32000），而它随后 grab_set 会让界面不可点。
+        from zephie_rolling_on.ui.ui_geometry import (
+            ensure_master_visible,
+            should_set_transient,
+        )
+
+        restored = ensure_master_visible(master)
+
         dialog = tk.Toplevel(master)
         self._dialog = dialog
         dialog.title("导出日志")
         dialog.configure(bg=theme["bg"])
         dialog.resizable(False, False)
-        try:
-            if master.winfo_viewable():
-                dialog.transient(master)
-        except tk.TclError:
-            pass
+        # 主窗刚由最小化还原时不能设 transient：窗口管理器会把本窗口 withdraw
+        # （坐标正确但完全不可见），而它随后 grab_set 会让界面既无弹窗也无响应。
+        if should_set_transient(master, restored=restored):
+            dialog.transient(master)
 
         # PhotoImage 需保引用，否则被 GC 回收后窗口图标会变回羽毛笔
         self._photos: list = []
@@ -315,6 +323,9 @@ class LogExportDialog:
             dialog.after(200, lambda: dialog.attributes("-topmost", False))
         except tk.TclError:
             pass
+        # 置顶会吞掉先前请求的位置（实测落到 (0,0) 或 Windows 级联位置），
+        # 所以这里再定位一次。
+        self._center(master)
 
         threading.Thread(
             target=self._worker,
@@ -327,15 +338,15 @@ class LogExportDialog:
     # -- 内部 --
 
     def _center(self, master) -> None:
-        self._dialog.update_idletasks()
-        w = max(self._dialog.winfo_width(), self._dialog.winfo_reqwidth(), 480)
-        h = max(self._dialog.winfo_height(), self._dialog.winfo_reqheight(), 190)
-        try:
-            x = master.winfo_rootx() + max(0, (master.winfo_width() - w) // 2)
-            y = master.winfo_rooty() + max(0, (master.winfo_height() - h) // 3)
-        except Exception:
-            x, y = 160, 160
-        self._dialog.geometry(f"{w}x{h}+{x}+{y}")
+        """屏幕居中偏上。见 ``ui_geometry.center_on_screen``。
+
+        用屏幕坐标而非 ``master`` 坐标：主窗最小化时 ``rootx/rooty`` 为 -32000，
+        按 master 居中的弹窗会落到屏幕外，而它已 ``grab_set()``，用户既看不到
+        弹窗又点不动界面。``master`` 参数保留仅为签名兼容。
+        """
+        from zephie_rolling_on.ui.ui_geometry import center_on_screen
+
+        center_on_screen(self._dialog)
 
     def _worker(self, log_text: str) -> None:
         try:

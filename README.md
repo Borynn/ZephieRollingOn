@@ -2,7 +2,9 @@
 
 游戏辅助脚本：窗口绑定、画面识别、自动点击，以及决策模型调用。
 
-Package: `zephie_rolling_on` · Dist: `zephie-rolling-on` · Version `1.0.2`
+Package: `zephie_rolling_on` · Dist: `zephie-rolling-on`
+
+版本号单一来源为 `src/zephie_rolling_on/__init__.py` 的 `__version__`；运行时的版本可在界面的「导出日志」里看到。
 
 **系统要求：Windows 10 / Windows 11，仅 64 位。**
 

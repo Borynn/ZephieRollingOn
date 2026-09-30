@@ -24,12 +24,26 @@ def show_blocking_notice(master: tk.Misc, title: str, message: str) -> None:
     """模态提示框；用户点「知道了」后返回。
 
     仅使用主界面已有的配色与字体，不引入新的视觉元素。
+
+    先还原最小化的主窗：否则 ``master`` 的 rootx/rooty 是 -32000，本窗口会被
+    放到屏幕外，而它紧接着 grab_set 抢走输入 —— 表现为「界面卡死、弹窗不见」。
+    关掉后**不**把主窗再最小化：脚本此时已停止，用户本就需要看到主界面。
     """
+    from zephie_rolling_on.ui.ui_geometry import (
+        ensure_master_visible,
+        should_set_transient,
+    )
+
+    restored = ensure_master_visible(master)
+
     dialog = tk.Toplevel(master)
     dialog.title(title)
     dialog.configure(bg=_UI["bg"])
     dialog.resizable(False, False)
-    dialog.transient(master)
+    # 主窗刚由最小化还原时不能设 transient：窗口管理器会把本窗口 withdraw
+    # （坐标正确但完全不可见），而它随后 grab_set 会让界面既无弹窗也无响应。
+    if should_set_transient(master, restored=restored):
+        dialog.transient(master)
 
     photo = apply_zehpie_window_icon(dialog)
 
@@ -110,6 +124,11 @@ def show_blocking_notice(master: tk.Misc, title: str, message: str) -> None:
     except tk.TclError:
         pass
 
+    # 再次定位：实测「先 geometry 再 -topmost/lift/focus」会让窗口管理器丢掉
+    # 先前请求的位置，窗口落到 (0,0) 或 Windows 的级联位置（本机多次运行依次
+    # 得到 +8+31 / +86+109 / +112+135）。所以置顶之后必须重新应用一次几何。
+    _center(dialog, master)
+
     # 保存引用，防止 PhotoImage 被回收
     if photo is not None:
         dialog._icon_ref = photo  # type: ignore[attr-defined]
@@ -117,15 +136,15 @@ def show_blocking_notice(master: tk.Misc, title: str, message: str) -> None:
     master.wait_window(dialog)
 
 
-def _center(dialog: tk.Toplevel, master: tk.Misc) -> None:
-    dialog.update_idletasks()
-    w, h = max(dialog.winfo_width(), 420), max(dialog.winfo_height(), 180)
-    try:
-        x = master.winfo_rootx() + max(0, (master.winfo_width() - w) // 2)
-        y = master.winfo_rooty() + max(0, (master.winfo_height() - h) // 3)
-    except tk.TclError:
-        x, y = 160, 160
-    dialog.geometry(f"{w}x{h}+{x}+{y}")
+def _center(dialog: tk.Toplevel, master: tk.Misc | None = None) -> None:
+    """屏幕居中偏上。见 :func:`ui_geometry.center_on_screen`。
+
+    ``master`` 参数保留只为签名兼容，不参与计算：用屏幕坐标可避免主窗最小化时
+    ``-32000`` 把弹窗推到屏幕外，也不受 ``transient``/级联/多显示器影响。
+    """
+    from zephie_rolling_on.ui.ui_geometry import center_on_screen
+
+    center_on_screen(dialog)
 
 
 # ---------------------------------------------------------------------------
