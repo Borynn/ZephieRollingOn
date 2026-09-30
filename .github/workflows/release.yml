@@ -12,6 +12,16 @@ on:
       - "v*"
   workflow_dispatch:
 
+# 同一个标签偶尔会触发两次运行（实测 v1.0.3 就出现了，两次相差 2 秒）。
+# 下面「先删后建」的发布步骤不是原子的，两个运行并发会互相抢：
+# 一个刚 delete、另一个才 create，可能白跑一轮或留下空的 Release。
+# 因此把同一 ref 的运行收敛成一个：新的运行直接取消旧的重复运行，
+# 而不是让它再构建六分钟。不同标签属于不同 group，互不干扰，
+# 所以连推两个版本不会被误取消。
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write  # required to create the release and upload the asset
 
