@@ -1,7 +1,7 @@
 # ZephieRollingOn — directory map
 
 Package: `zephie_rolling_on` · Dist: `zephie-rolling-on`
-License: non-commercial only (`LICENSE`)
+License: MIT（范围豁免见 `LICENSE` / `NOTICE`：闭源 `.zm` 与第三方内容不在 MIT 内）
 
 | Path | Purpose |
 |------|---------|
@@ -12,6 +12,7 @@ License: non-commercial only (`LICENSE`)
 | `src/zephie_rolling_on/executor/` | Click, replenish, mouse shield |
 | `src/zephie_rolling_on/vision/` | Capture, OCR, templates, deck scan, calibration |
 | `src/zephie_rolling_on/vision/image_io.py` | Unicode-safe image read/write (Windows OpenCV ANSI path limitation) |
+| `src/zephie_rolling_on/vision/platinum_hammer.py` | Detect the platinum-hammer reward icon (used by the「不跳过白金锤子」mode) |
 | `src/zephie_rolling_on/models/` | Game state, cards, map board |
 | `src/zephie_rolling_on/data/` | Config loaders |
 | `src/zephie_rolling_on/decision_models/` | Model package discovery, host pipe client, shared contract types |
@@ -40,11 +41,13 @@ License: non-commercial only (`LICENSE`)
 | `scripts/pyi_rth_tcl_tk.py` | PyInstaller runtime hook: pin bundled Tcl/Tk paths |
 | `assets/ui/zehpie_window_icon.png` | Window icon (used at runtime by the theme) |
 | `assets/ui/scale_warning.png` | Illustration for the non-100%-display-scale startup notice |
+| `assets/ui/platinum_hammer.png` | Template for the platinum-hammer reward; required by the build script and CI (the「不跳过白金锤子」mode degrades silently without it) |
 | `assets/ui/zehpie_window_icon.ico` | Exe icon, embedded by `build_portable.ps1` |
 | `environment.yml` | Conda env `zephie_rolling_on` |
 | `pyproject.toml` / `requirements.txt` | Packaging + dependencies |
 | `requirements.lock` | Exact pins for reproducible builds (full tree incl. PyInstaller/setuptools); used by CI |
 | `scripts/check_lock.py` | Verify `requirements.lock` still satisfies every floor in `requirements.txt` |
+| `scripts/check_undefined_names.py` | Scope-aware undefined-name check (AST). `py_compile` and import both miss these; in a Tk callback the `NameError` is silently dropped. Wired into `build_portable.ps1` and CI |
 | `LICENSE` | MIT（含范围豁免：闭源 `.zm` 与第三方内容不在 MIT 内） |
 | `NOTICE` | 第三方署名、游戏素材版权声明、免责说明；随分发包一起发出 |
 | `.github/workflows/release.yml` | 推 `v*` 标签自动构建便携包并创建 Release |

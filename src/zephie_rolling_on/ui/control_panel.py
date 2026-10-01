@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 from tkinter import scrolledtext
@@ -21,12 +22,14 @@ from zephie_rolling_on.app.deck_pool_scan import scan_and_apply_deck_pool
 from zephie_rolling_on.data.map_loader import load_map_from_xlsx
 from zephie_rolling_on.data.adventure_frame import load_anchor, save_anchor
 from zephie_rolling_on.data.auto_click_config import (
+    SKIP_ALL,
+    SKIP_EXCEPT_HAMMER,
+    SKIP_NONE,
     load_skip_animation_via_f12,
-    load_skip_exclamation_reward,
     save_auto_replenish_dice,
     save_click_interval_ms,
     save_skip_animation_via_f12,
-    save_skip_exclamation_reward,
+    save_skip_exclamation_mode,
 )
 from zephie_rolling_on.executor.mouse_shield import get_mouse_shield
 from zephie_rolling_on.ui.frame_locator import AdventureFrameLocator, FrameAnchor
@@ -46,6 +49,7 @@ from zephie_rolling_on.ui.ui_geometry import apply_saved_geometry, remember_wind
 from zephie_rolling_on.ui.zehpie_theme import (
     RoundedButton,
     ZephieMinimalCheck,
+    ZephieSelect,
     apply_zehpie_window_icon,
     draw_dashed_divider,
     make_rounded_entry,
@@ -631,19 +635,25 @@ class ControlPanel:
             pady=4,
         )
 
-        self._skip_exclamation_var = tk.BooleanVar(
-            value=bool(self._runtime.skip_exclamation_reward)
+        # 「感叹号格奖励」处理模式（旧版是复选框，现为下拉三选一）
+        self._skip_exclamation_var = tk.StringVar(
+            value=str(self._runtime.skip_exclamation_mode or SKIP_ALL)
         )
-        self._chk_skip_exclamation = ZephieMinimalCheck(
+        self._sel_skip_exclamation = ZephieSelect(
             auto,
-            "跳过感叹号格奖励",
+            "跳过感叹号格奖励:",
+            values=[
+                ("跳过所有奖励", SKIP_ALL),
+                ("不跳过任何奖励", SKIP_NONE),
+                ("不跳过白金锤子", SKIP_EXCEPT_HAMMER),
+            ],
             variable=self._skip_exclamation_var,
             command=self._on_skip_exclamation_change,
             bg=card,
             fg=text_c,
             font=font_ui,
         )
-        self._chk_skip_exclamation.pack(fill="x", pady=(8, 3))
+        self._sel_skip_exclamation.pack(fill="x", pady=(8, 3))
 
         self._skip_animation_var = tk.BooleanVar(
             value=bool(self._runtime.skip_animation_via_f12)
@@ -764,7 +774,6 @@ class ControlPanel:
         self._text.tag_config("log_action", foreground=_UI["accent_dark"], font=_UI["font_section"])
         self._text.tag_config("log_recognize", foreground=_UI["mint"])
         self._text.tag_config("log_auto", foreground=_UI["sky"])
-        self._text.tag_config("log_pause", foreground=_UI["warn"])
         self._text.tag_config("log_stop", foreground=_UI["danger"])
         self._text.tag_config("log_hand", foreground=_UI["accent"])
         self._text.tag_config("log_error", foreground=_UI["danger"], font=_UI["font_section"])
@@ -899,9 +908,16 @@ class ControlPanel:
             return
         prev_hwnd = self._bound.capture_hwnd if self._bound else None
         self._bound = info
-        if prev_hwnd is not None and int(prev_hwnd) != int(info.capture_hwnd):
-            from zephie_rolling_on.vision.capture_wgc import release_wgc_session
+        from zephie_rolling_on.vision.capture_wgc import (
+            release_wgc_session,
+            reset_session_create_attempts,
+        )
 
+        # 重新绑定即重置 WGC 会话创建的重试预算。**即便绑回同一个窗口也重置**：
+        # 用户重新绑定往往正是因为上一次不可用（换了窗口形态/改了系统设置），
+        # 此时旧计数已不代表现状。
+        reset_session_create_attempts(int(info.capture_hwnd))
+        if prev_hwnd is not None and int(prev_hwnd) != int(info.capture_hwnd):
             # Release only this panel's prior hwnd; keep other instances' WGC sessions
             release_wgc_session(int(prev_hwnd))
         # 本界面内存；默认不写共享 yaml，避免多开互相覆盖
@@ -1088,6 +1104,13 @@ class ControlPanel:
             or self._recognition_test_busy
         ):
             self._append_log("[导出日志] 请先停止脚本（等按钮恢复为「启动」），再导出日志。")
+            return
+
+        if not self._resolved_hwnd():
+            self._append_log(
+                "[导出日志] 未绑定游戏窗口，已取消导出。"
+                "自检要实际截取游戏画面，请先绑定游戏窗口再导出。"
+            )
             return
 
         log_text = self._text.get("1.0", "end").rstrip("\n") + "\n"
@@ -1799,11 +1822,12 @@ class ControlPanel:
                 msg.startswith("[操作]")
                 or msg.startswith("[本局结束] 已清空幸运卡池与手牌")
                 or msg.startswith("[轮次] 已完成 ")
-                or msg.startswith("[轮次] 本局已结束，立即点击开启新局")
+                or msg.startswith("[轮次] 本局已结束")
                 or msg.startswith("脚本已启动")
                 or msg.startswith("[停止]")
-                or msg.startswith("[暂停]")
-                or msg.startswith("[继续]")
+                # [自动] 一次灰屏/一次失败最多一条（都有守卫），不会刷屏；
+                # 新增的「跳过感叹号格奖励 / 未检测到白金锤子」靠它才能被用户看到。
+                or msg.startswith("[自动]")
             ):
                 return
         self._log_queue.put(msg)
@@ -1827,13 +1851,11 @@ class ControlPanel:
     def _log_tag_for_message(msg: str) -> str | None:
         if msg.startswith("[操作]"):
             return "log_action"
-        if msg.startswith("[识别]") or msg.startswith("[继续] 识别"):
+        if msg.startswith("[识别]"):
             return "log_recognize"
-        if msg.startswith("[暂停]") or msg.startswith("[继续]"):
-            return "log_pause"
         if msg.startswith("[停止]"):
             return "log_stop"
-        if msg.startswith("[自动]"):
+        if msg.startswith("[自动]") or msg.startswith("[截屏]"):
             return "log_auto"
         if msg.startswith("[手牌]") or msg.startswith("[卡池]") or msg.startswith("幸运卡:"):
             return "log_hand"
@@ -1910,11 +1932,15 @@ class ControlPanel:
             return 1
 
     def _on_skip_exclamation_change(self) -> None:
-        enabled = bool(self._skip_exclamation_var.get())
+        mode = str(self._skip_exclamation_var.get())
         with use_runtime(self._runtime):
-            save_skip_exclamation_reward(enabled)
-        state = "开启" if enabled else "关闭"
-        self._append_log(f"跳过感叹号格奖励已{state}")
+            save_skip_exclamation_mode(mode)
+        label = {
+            SKIP_ALL: "跳过所有奖励",
+            SKIP_NONE: "不跳过任何奖励",
+            SKIP_EXCEPT_HAMMER: "不跳过白金锤子",
+        }.get(mode, mode)
+        self._append_log(f"感叹号格奖励处理方式已设为「{label}」")
 
     def _on_skip_animation_change(self) -> None:
         enabled = bool(self._skip_animation_var.get())
@@ -1953,13 +1979,12 @@ class ControlPanel:
 
     def _sync_auto_click_buttons(self) -> None:
         running = self._session.is_running()
-        paused = self._session.is_paused()
         stopping = self._session.is_stopping()
         preparing = self._auto_start_preparing
         spin_state = "disabled" if (running or preparing) else "normal"
         self._spn_rounds.config(state=spin_state)
-        if hasattr(self, "_chk_skip_exclamation"):
-            self._chk_skip_exclamation.config(state=spin_state)
+        if hasattr(self, "_sel_skip_exclamation"):
+            self._sel_skip_exclamation.config(state=spin_state)
         if hasattr(self, "_chk_skip_animation"):
             self._chk_skip_animation.config(state=spin_state)
         if hasattr(self, "_chk_auto_replenish"):
@@ -1972,11 +1997,8 @@ class ControlPanel:
         elif stopping:
             self._btn_auto_start.config(state="disabled", text="启动")
             self._btn_auto_stop.config(state="disabled", text="停止中…")
-        elif running and not paused:
+        elif running:
             self._btn_auto_start.config(state="disabled", text="启动")
-            self._btn_auto_stop.config(state="normal", text="停止")
-        elif running and paused:
-            self._btn_auto_start.config(state="normal", text="启动 / 继续")
             self._btn_auto_stop.config(state="normal", text="停止")
         else:
             self._btn_auto_start.config(state="normal", text="启动")
@@ -1984,10 +2006,6 @@ class ControlPanel:
         self._sync_recognition_test_buttons()
 
     def _auto_click_start(self) -> None:
-        if self._session.is_paused():
-            self._session.resume()
-            self._sync_auto_click_buttons()
-            return
         if self._auto_start_preparing:
             self._append_log("启动准备中（标定/补充骰子/卡池），请稍候…")
             return
@@ -2006,7 +2024,7 @@ class ControlPanel:
             return
 
         rounds = self._read_rounds_target()
-        skip_ex = bool(self._skip_exclamation_var.get())
+        skip_ex_mode = str(self._skip_exclamation_var.get())
         auto_replenish = bool(self._auto_replenish_var.get())
         self._update_current_cell(None)
         self._auto_start_preparing = True
@@ -2044,7 +2062,7 @@ class ControlPanel:
                             lambda: self._finish_auto_start_prep(
                                 hwnd=int(hwnd),
                                 rounds=rounds,
-                                skip_ex=skip_ex,
+                                skip_exclamation_mode=skip_ex_mode,
                                 auto_replenish=auto_replenish,
                                 calib_ok=False,
                                 calib_msg=calib_msg,
@@ -2073,7 +2091,7 @@ class ControlPanel:
                                 lambda: self._finish_auto_start_prep(
                                     hwnd=int(hwnd),
                                     rounds=rounds,
-                                    skip_ex=skip_ex,
+                                    skip_exclamation_mode=skip_ex_mode,
                                     auto_replenish=auto_replenish,
                                     calib_ok=True,
                                     calib_msg=calib_msg,
@@ -2097,9 +2115,14 @@ class ControlPanel:
                     )
                     pool_ok = pool_result is not None
             except Exception as exc:
+                # 必须在 except 作用域内取堆栈：等 root.after 的回调在 UI 线程里
+                # 执行时 sys.exc_info() 已经清空，那时再取只会得到 "NoneType: None"。
+                detail = traceback.format_exc()
                 self.root.after(
                     0,
-                    lambda e=exc: self._finish_auto_start_prep_error(e),
+                    lambda e=exc, d=detail: self._finish_auto_start_prep_error(
+                        e, detail=d
+                    ),
                 )
                 return
             self.root.after(
@@ -2107,7 +2130,7 @@ class ControlPanel:
                 lambda: self._finish_auto_start_prep(
                     hwnd=int(hwnd),
                     rounds=rounds,
-                    skip_ex=skip_ex,
+                    skip_exclamation_mode=skip_ex_mode,
                     auto_replenish=auto_replenish,
                     calib_ok=calib_ok,
                     calib_msg=calib_msg,
@@ -2127,7 +2150,7 @@ class ControlPanel:
         *,
         hwnd: int,
         rounds: int,
-        skip_ex: bool,
+        skip_exclamation_mode: str,
         auto_replenish: bool = True,
         calib_ok: bool,
         calib_msg: str,
@@ -2139,13 +2162,17 @@ class ControlPanel:
         replenish_msg: str = "",
     ) -> None:
         self._auto_start_preparing = False
-        _ = (calib_msg, pool_ok, toggle_msg, replenish_msg)
         self._sync_calibration_display()
         if self._calibration_dialog and self._calibration_dialog.winfo_exists():
             self._calibration_dialog.sync_from_file()
 
         if not calib_ok:
+            # calib_msg 即 boot.message，已含「第1次/第2次标定 + 开关检测」的完整
+            # 原因串；早先它被 `_ = (calib_msg, ...)` 丢掉，用户只看到一行
+            # 「标定出错」而无法排查。
             self._append_log("[启动] 标定出错")
+            for line in str(calib_msg).splitlines():
+                self._append_log(f"  {line}")
             self._sync_auto_click_buttons()
             return
 
@@ -2165,7 +2192,10 @@ class ControlPanel:
             return
 
         if auto_replenish and not replenish_ok:
+            # 同 calib_msg：replenish_msg 也在同一个 `_ = (...)` 里被丢弃过。
             self._append_log("[启动] 补充骰子出错")
+            for line in str(replenish_msg).splitlines():
+                self._append_log(f"  {line}")
             self._sync_auto_click_buttons()
             return
 
@@ -2183,21 +2213,27 @@ class ControlPanel:
             hwnd,
             auto_click=True,
             rounds_target=rounds,
-            skip_exclamation_reward=skip_ex,
+            # 本函数的参数就叫 skip_exclamation_mode；同名传参，不做别名，
+            # 避免再出现「名字没跟着语义改」导致的作用域事故。
+            skip_exclamation_mode=skip_exclamation_mode,
             auto_replenish_dice=auto_replenish,
         )
         self._sync_auto_click_buttons()
 
-    def _finish_auto_start_prep_error(self, exc: BaseException) -> None:
+    def _finish_auto_start_prep_error(
+        self, exc: BaseException, *, detail: str = ""
+    ) -> None:
         self._auto_start_preparing = False
-        _ = exc
-        self._append_log("[启动] 准备出错")
-        self._sync_auto_click_buttons()
-
-    def _auto_click_pause(self) -> None:
-        # 热键仍可暂停；界面已无暂停按钮
-        self._session.pause()
-        self._disable_mouse_shield()
+        self._append_log(f"[启动] 准备出错：{type(exc).__name__}: {exc}")
+        if detail:
+            # 只保留末尾若干行：堆栈最深处（真正抛出的那帧）在最后，最有价值；
+            # 同时避免深层递归产生上千行而卡住日志控件。
+            lines = detail.rstrip("\n").splitlines()
+            self._append_log("  以下为出错位置（供排查）：")
+            for line in lines[-30:]:
+                self._append_log(f"  {line}")
+            if len(lines) > 30:
+                self._append_log(f"  …（省略前面 {len(lines) - 30} 行）")
         self._sync_auto_click_buttons()
 
     def _auto_click_stop(self) -> None:

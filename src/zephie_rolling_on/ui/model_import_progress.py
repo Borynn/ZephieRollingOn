@@ -54,6 +54,9 @@ class ModelImportProgressDialog(tk.Toplevel):
         self._on_finished = on_finished
         self._on_failed = on_failed
         self._on_log = on_log or (lambda _m: None)
+        self._master = master
+        # 两个布局各自需要的窗口宽度，_build() 里量出来；见 _refit()
+        self._win_width = 0
         # Import stickers come from the package itself when it carries them.
         self._art_busy_bytes = self._read_embedded_art("busy")
         self._art_done_bytes = self._read_embedded_art("done")
@@ -84,16 +87,32 @@ class ModelImportProgressDialog(tk.Toplevel):
             self._pct_label.config(text=f"{self._pct}%")
             self._draw_ring()
         self.update_idletasks()
-        self._center(master)
+        self._refit(master)
         try:
             self.grab_set()
         except tk.TclError:
             pass
         # 再定位一次：focus/grab 类调用可能让窗口管理器丢掉先前请求的位置。
-        self._center(master)
+        self._refit(master)
 
         if not self._preview_mode:
             threading.Thread(target=self._worker, name="dm-import", daemon=True).start()
+
+    def _refit(self, master: tk.Misc | None = None) -> None:
+        """按当前布局重新定尺寸并居中。
+
+        **必须显式设 geometry**：顶层窗口一旦映射，就不会再因为换了内容而自动变大
+        （``resizable(False, False)`` 下尤其明显）。原来「完成」布局比「导入中」宽时
+        文字会被裁掉——实测 ``zephie_m1_points`` 需要 550px 而窗口停在 460px，
+        标签只分到 188px 却需要 272px。
+
+        宽度统一取 ``_win_width``（两个布局的较大者），这样切换状态时窗口不左右跳。
+        """
+        self.update_idletasks()
+        width = max(int(self._win_width), int(self.winfo_reqwidth()))
+        height = int(self.winfo_reqheight())
+        self.geometry(f"{width}x{height}")
+        self._center(master if master is not None else self._master)
 
     def _center(self, master: tk.Misc) -> None:
         """屏幕居中偏上。见 ``ui_geometry.center_on_screen``。
@@ -218,7 +237,9 @@ class ModelImportProgressDialog(tk.Toplevel):
             bg=_UI["card"],
             fg=_UI["accent_deep"],
             font=self._font_title,
-            wraplength=280,
+            # 放宽到 460：280 时稍长的模型名（如 zephie_m1_points）会提前折行，
+            # 而折行后的可用宽度又不够，反而更容易被裁。
+            wraplength=460,
             justify="left",
         )
         self._done_label.pack(expand=True, anchor="w", pady=(40, 12))
@@ -269,6 +290,19 @@ class ModelImportProgressDialog(tk.Toplevel):
         )
         # 默认隐藏失败按钮
         self._draw_ring()
+
+        # 量出两个布局各自需要的宽度，取较大者作为窗口宽度。
+        # 顶层窗口映射后不会再自动变大，所以必须**提前**知道最宽的那个需求，
+        # 否则切到「完成」时右侧文字会被裁掉。
+        self.update_idletasks()
+        w_busy = int(self.winfo_reqwidth())
+        self._done.pack(fill="both", expand=True)
+        self.update_idletasks()
+        w_done = int(self.winfo_reqwidth())
+        self._done.pack_forget()
+        self._busy.pack(fill="both", expand=True)
+        self.update_idletasks()
+        self._win_width = max(w_busy, w_done)
 
     def _draw_ring(self) -> None:
         c = self._ring
@@ -354,16 +388,24 @@ class ModelImportProgressDialog(tk.Toplevel):
             self._anim_job = None
         self._busy.pack_forget()
         if ok:
+            # 撤下失败态的残留控件：否则它们的尺寸会算进窗口高度（实测切回后
+            # 窗口仍停在失败态的 359px，而不是完成态的 266px）。
+            self._fail_reason.pack_forget()
+            self._btn_fail.pack_forget()
             self._done.pack(fill="both", expand=True)
             self._btn_done.config(state="normal")
         else:
             self._busy.pack(fill="both", expand=True)
             self._busy_caption.config(text="导入失败了…", fg="#C9786A")
+            # 顺序要紧：``before=self._btn_fail`` 要求该按钮**已经 pack**，
+            # 先 pack 原因再 pack 按钮会抛 "isn't packed"，失败原因根本显示不出来。
+            self._btn_fail.pack(anchor="e", pady=(6, 0))
             if reason:
                 # 把失败原因写进界面，否则用户只能看到"导入失败"而无法排查
-                self._fail_reason.config(text=reason, wraplength=300)
+                self._fail_reason.config(text=reason, wraplength=420)
                 self._fail_reason.pack(anchor="w", pady=(4, 0), before=self._btn_fail)
-            self._btn_fail.pack(anchor="e", pady=(6, 0))
+        # 换了布局就重新定尺寸：窗口不会自己变大，不重算就会被裁。
+        self._refit()
 
     def _worker(self) -> None:
         def on_progress(pct: int, msg: str) -> None:

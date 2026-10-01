@@ -3,8 +3,12 @@
 # 用户的实际设置在 config/auto_click.yaml（gitignore，覆盖更新时保留）。
 # 该文件缺失时由此文件提供初值；两者都存在时以 auto_click.yaml 为准。
 
-# 跳过「感叹号格」奖励弹窗
-skip_exclamation_reward: true
+# 感叹号格奖励的处理模式（检测到「执行任务」按钮 = 踩到 H 类格子时）
+#   skip_all           跳过所有奖励 —— 自动三连点跳过（默认）
+#   skip_none          不跳过任何奖励 —— 直接停止脚本，由你自行处理
+#   skip_except_hammer 不跳过白金锤子 —— 检测到白金锤子才停，否则照常跳过
+# 旧版本此项是 true/false 开关，仍可读取（true → skip_all，false → skip_none）。
+skip_exclamation_reward: skip_all
 
 # 投骰/用卡后跳过动画（interception 下按 F12，其余点击开关界面）
 skip_animation_via_f12: true

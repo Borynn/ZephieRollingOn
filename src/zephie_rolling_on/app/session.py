@@ -5,7 +5,6 @@ from zephie_rolling_on.paths import project_root
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import replace
 from pathlib import Path
 
 from zephie_rolling_on.app.runtime_state import RuntimeState, use_runtime
@@ -20,6 +19,10 @@ from zephie_rolling_on.models.lucky_deck import (
 )
 from zephie_rolling_on.data.map_loader import load_map_from_xlsx
 from zephie_rolling_on.data.auto_click_config import (
+    SKIP_ALL,
+    SKIP_EXCEPT_HAMMER,
+    SKIP_NONE,
+    normalize_skip_exclamation_mode,
     load_same_cell_retry_after,
     load_skip_animation_via_f12,
 )
@@ -35,7 +38,7 @@ from zephie_rolling_on.vision.capture import (
 from zephie_rolling_on.vision.adventure_complete_banner import find_adventure_complete_banner
 from zephie_rolling_on.vision.confirm_button import find_confirm_button
 from zephie_rolling_on.vision.execute_task_button import find_execute_task_button
-from zephie_rolling_on.vision.lucky_match import LuckyCardMatch, slot_center_in_client
+from zephie_rolling_on.vision.lucky_match import slot_center_in_client
 from zephie_rolling_on.vision.recognize import (
     RecognitionResult,
     format_recognition_timing,
@@ -89,8 +92,7 @@ class ScriptSession:
         self.on_round_progress = on_round_progress or (lambda _c, _t: None)
         self.on_auto_stopped = on_auto_stopped or (lambda: None)
         self._stop = threading.Event()  # 终止后台循环（停止/关闭程序）
-        self._pause_requested = threading.Event()  # 暂停请求（立即生效）
-        self._stop_requested = threading.Event()  # 停止请求（立即生效，供暂停等待期间检测）
+        self._stop_requested = threading.Event()  # 停止请求（立即生效）
         self._thread: threading.Thread | None = None
         self.board: MapBoard | None = None
         self.hwnd: int | None = None
@@ -104,10 +106,6 @@ class ScriptSession:
         self._same_cell_streak: int = 0
         # 最近一次已执行的决策动作（同格重试时只重放，不重算）
         self._last_action: dict | None = None
-        # 继续后需重识格子+骰子再规划（不识别幸运卡槽）
-        self._resume_replan = False
-        # 最近一次完整识别的卡槽匹配，供继续后用卡点击定位
-        self._last_lucky_matches: list[LuckyCardMatch] = []
         # 已检测到冒险完成横幅，待点确认后再清卡池/计轮次
         self._adventure_complete_seen = False
         # 本局结束后的卡池清空 / 轮次计数是否已处理
@@ -116,8 +114,7 @@ class ScriptSession:
         self._rounds_target = 1
         self._rounds_completed = 0
         self._waiting_new_round_dice = False
-        self._pending_new_round_start = False
-        self.skip_exclamation_reward = False
+        self.skip_exclamation_mode = SKIP_ALL
         self.auto_replenish_dice = True
         self._exclamation_skip_handled = False
         self._adventure_complete_debug_saved = False
@@ -128,7 +125,7 @@ class ScriptSession:
         auto_click: bool,
         *,
         rounds_target: int = 1,
-        skip_exclamation_reward: bool = False,
+        skip_exclamation_mode: str = SKIP_ALL,
         auto_replenish_dice: bool = True,
     ) -> None:
         if self._thread and self._thread.is_alive():
@@ -148,20 +145,18 @@ class ScriptSession:
         self._last_acted_cell = None
         self._same_cell_streak = 0
         self._last_action = None
-        self._resume_replan = False
-        self._last_lucky_matches = []
         self._adventure_complete_seen = False
         self._round_end_finalized = False
         self._rounds_target = max(1, int(rounds_target))
         self._rounds_completed = 0
         self._waiting_new_round_dice = False
-        self._pending_new_round_start = False
-        self.skip_exclamation_reward = bool(skip_exclamation_reward)
+        self.skip_exclamation_mode = normalize_skip_exclamation_mode(
+            skip_exclamation_mode
+        )
         self.auto_replenish_dice = bool(auto_replenish_dice)
         self._exclamation_skip_handled = False
         self._adventure_complete_debug_saved = False
         self._stop.clear()
-        self._pause_requested.clear()
         self._stop_requested.clear()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
@@ -170,60 +165,30 @@ class ScriptSession:
         if auto_click:
             self.on_round_progress(0, self._rounds_target)
 
-    def pause(self) -> None:
-        if not self.is_running():
-            self.on_log("脚本未在运行，无法暂停。")
-            return
-        if self._pause_requested.is_set():
-            return
-        self._pause_requested.set()
-        self.on_log("[暂停] 已立即暂停，等待继续…")
-
-    def resume(self) -> None:
-        if not self.is_running():
-            self.on_log("脚本未在运行。")
-            return
-        if not self._pause_requested.is_set():
-            return
-        self._pause_requested.clear()
-        self._resume_replan = True
-        self.on_log("[继续] 已取消暂停，将重新识别格子与骰子后规划。")
-
     def stop(self) -> None:
         """立即停止后台循环。"""
         if not self.is_running():
             self.on_log("脚本未在运行。")
             return
         self._stop_requested.set()
-        self._resume_replan = False
         self._stop.set()
         self.on_log("[停止] 已立即停止。")
         if self._thread:
             self._thread.join(timeout=5.0)
-        self._pause_requested.clear()
         self._thread = None
         self._stop_requested.clear()
 
     def force_stop(self) -> None:
         """硬停止：立即终止线程（关闭程序时用）。"""
         self._stop_requested.set()
-        self._resume_replan = False
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=5.0)
-        self._pause_requested.clear()
         self._thread = None
         self._stop_requested.clear()
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
-
-    def is_paused(self) -> bool:
-        return (
-            self.is_running()
-            and self._pause_requested.is_set()
-            and not self._stop_requested.is_set()
-        )
 
     def is_stopping(self) -> bool:
         return self.is_running() and self._stop_requested.is_set()
@@ -241,10 +206,6 @@ class ScriptSession:
                         if not self._auto_click_step():
                             break
                     else:
-                        if self._pause_requested.is_set():
-                            if self._stop.wait(0.25):
-                                break
-                            continue
                         result = run_tick(self.board, self.regions, hwnd=self.hwnd)
                         rec = result.recognition
                         if rec is not None:
@@ -306,13 +267,6 @@ class ScriptSession:
         if self._stop.is_set() or self._stop_requested.is_set():
             return False
 
-        if self._pause_requested.is_set():
-            if not self._wait_while_paused():
-                return False
-
-        if self._resume_replan:
-            return self._execute_resume_replan()
-
         timing_on = should_log_recognition_timing()
         capture_ms: float | None = None
         if timing_on:
@@ -332,11 +286,11 @@ class ScriptSession:
                     kind="occluded",
                 )
                 return False
-            self.on_log("[自动] 无法截取游戏窗口")
+            self.on_log("[截屏] 无法截取游戏窗口")
             return True
 
         if self._is_dim(frame):
-            # 变灰：优先确认并点击；若为 H 格执行任务则暂停或自动跳过。
+            # 变灰：优先确认并点击；H 格执行任务则自动跳过或停止脚本。
             self._handle_dim_overlay(frame, capture_ms=capture_ms)
             return True
 
@@ -344,24 +298,7 @@ class ScriptSession:
         self._adventure_complete_seen = False
         self._adventure_complete_debug_saved = False
 
-        if self._pending_new_round_start:
-            if self._stop_requested.is_set():
-                return False
-            self._pending_new_round_start = False
-            executor_actions.start_new_round(self.hwnd, on_log=None)
-            self._waiting_new_round_dice = True
-            return True
-
         return self._handle_planner_action(frame, capture_ms=capture_ms)
-
-    def _wait_while_paused(self) -> bool:
-        """暂停期间阻塞；返回 False 表示期间收到停止。"""
-        while self._pause_requested.is_set():
-            if self._stop.is_set() or self._stop_requested.is_set():
-                return False
-            if self._stop.wait(0.2):
-                return False
-        return not (self._stop.is_set() or self._stop_requested.is_set())
 
     def _handle_dim_overlay(
         self, frame, *, capture_ms: float | None = None
@@ -407,7 +344,7 @@ class ScriptSession:
         if confirm is not None:
             self._log_timing_parts("灰屏模板", parts)
             self.on_log(
-                f"[自动] 画面变灰，检测到确认按钮(score={confirm.score:.2f})，"
+                f"[自动] 检测到确认按钮(score={confirm.score:.2f})，"
                 f"点击 ({confirm.center_x}, {confirm.center_y})",
             )
             executor_actions.click_confirm_button(
@@ -430,24 +367,38 @@ class ScriptSession:
         self._log_timing_parts("灰屏模板", parts)
 
         if task is not None:
-            if self.skip_exclamation_reward:
+            mode = self.skip_exclamation_mode
+
+            if mode == SKIP_NONE:
+                # 不跳过任何奖励：脚本无法处理这个弹窗，停下来交给使用者。
+                self._request_stop_from_loop("不跳过感叹号格奖励")
+
+            elif mode == SKIP_ALL:
+                # 跳过所有奖励：无需再检测任何东西。
                 if not self._exclamation_skip_handled:
                     self._exclamation_skip_handled = True
-                    self.on_log(
-                        f"[自动] 画面变灰，检测到执行任务按钮(score={task.score:.2f})，"
-                        "已开启「跳过感叹号格奖励」，自动三连点…",
-                    )
+                    self.on_log("[自动] 跳过感叹号格奖励")
                     executor_actions.skip_exclamation_reward(
                         self.hwnd,
                         on_log=self.on_log,
                     )
-                return
-            if not self._pause_requested.is_set():
-                self._pause_requested.set()
-                self.on_log(
-                    f"[自动] 画面变灰，检测到执行任务按钮(score={task.score:.2f})，"
-                    "踩到 H 类格子，已暂停，请自行处理后点「启动」继续。",
+
+            elif mode == SKIP_EXCEPT_HAMMER:
+                # 不跳过白金锤子：只有真的检测到锤子才停，否则照常跳过。
+                from zephie_rolling_on.vision.platinum_hammer import (
+                    find_platinum_hammer,
                 )
+
+                if find_platinum_hammer(frame, self.regions) is not None:
+                    self._request_stop_from_loop("检测到白金锤子")
+                elif not self._exclamation_skip_handled:
+                    self._exclamation_skip_handled = True
+                    self.on_log("[自动] 未检测到白金锤子，跳过感叹号格奖励")
+                    executor_actions.skip_exclamation_reward(
+                        self.hwnd,
+                        on_log=self.on_log,
+                    )
+            return
 
     def _handle_planner_action(
         self, frame, *, capture_ms: float | None = None
@@ -477,7 +428,6 @@ class ScriptSession:
                 anchor_cell_id=self._last_acted_cell,
             )
             _log_rec("新局骰子", rec)
-            self._last_lucky_matches = list(rec.lucky_matches)
             if is_new_round_dice_ready(
                 dice_used=rec.dice_used,
                 dice_remaining=rec.dice_remaining,
@@ -510,13 +460,16 @@ class ScriptSession:
             return True
 
         # 亮屏 + START 按钮 → 本局结束，立刻开新局（与骰子数无关）
-        start_hit = find_roll_kind(frame, self.regions)
-        if start_hit is not None and start_hit.kind == "start":
+        hit = find_roll_kind(frame, self.regions)
+        if hit is not None and hit.kind == "start":
             return self._end_round_on_start_and_begin_new(
-                score=start_hit.score,
+                score=hit.score,
             )
+        # 复用同一次检测的按钮状态：决策前的零骰检查要区分免费/付费骰
+        # （免费骰表示「还能再投一次」，此时不该停机）
+        roll_kind = hit.kind if hit is not None else None
 
-        elif self._last_acted_cell is not None:
+        if self._last_acted_cell is not None:
             quick = recognize_cell_id_on_frame(
                 frame,
                 self.regions,
@@ -531,7 +484,9 @@ class ScriptSession:
                 return True
             self._same_cell_streak = 0
             # 亮屏且格子已变化：决策前先查可用骰子，再跑骰子/卡牌识别
-            if not self._gate_inventory_dice_before_decision(frame):
+            if not self._gate_inventory_dice_before_decision(
+                frame, roll_kind=roll_kind
+            ):
                 return False
 
         else:
@@ -545,7 +500,9 @@ class ScriptSession:
             if quick.cell_id is None:
                 return self._recalib_frame_on_cell_miss()
             self.on_cell(quick.cell_id)
-            if not self._gate_inventory_dice_before_decision(frame):
+            if not self._gate_inventory_dice_before_decision(
+                frame, roll_kind=roll_kind
+            ):
                 return False
 
         rec = recognize_frame(
@@ -555,7 +512,6 @@ class ScriptSession:
             anchor_cell_id=self._last_acted_cell,
         )
         _log_rec("完整识别", rec)
-        self._last_lucky_matches = list(rec.lucky_matches)
         if self._stop_requested.is_set():
             return False
 
@@ -594,7 +550,6 @@ class ScriptSession:
         _ = score
         if not self._finalize_round_on_adventure_complete():
             return False
-        self._pending_new_round_start = False
         self.on_log("[轮次] 本局已结束，准备开启新局…")
         executor_actions.start_new_round(self.hwnd, on_log=self.on_log)
         self._waiting_new_round_dice = True
@@ -602,17 +557,23 @@ class ScriptSession:
 
     def _is_round_in_progress(self) -> bool:
         """本轮仍在进行（未结算完、未在等新局骰子重置）。"""
-        return (
-            not self._waiting_new_round_dice
-            and not self._round_end_finalized
-            and not self._pending_new_round_start
-        )
+        return not self._waiting_new_round_dice and not self._round_end_finalized
 
-    def _gate_inventory_dice_before_decision(self, frame) -> bool:
+    def _gate_inventory_dice_before_decision(
+        self, frame, *, roll_kind: str | None = None
+    ) -> bool:
         """决策前检测可用骰子（与是否开启自动补充无关）。
 
-        本轮未结束且合计为 0 → 记日志并请求停止；返回 False 表示退出循环。
-        OCR 失败不据此停脚本。
+        只有**本轮进行中、可用骰子为 0、且投骰按钮为付费骰**三者同时成立
+        才停机。
+
+        免费骰（``roll_kind == "free"``）说明最后一次投骰触发了免费投掷，
+        即使可用骰子为 0 也还能再投一次 —— 此时停机是错的，这是本检查唯一
+        要放行的情形。手牌不参与判断：靠不消耗骰子的卡牌续投不是好决策，
+        留给使用者补充骰子后继续。
+
+        ``roll_kind`` 为 ``None``（按钮未识别）时按付费处理，维持保守停机。
+        返回 False 表示退出循环。OCR 失败不据此停脚本。
         """
         if not self._is_round_in_progress():
             return True
@@ -626,12 +587,21 @@ class ScriptSession:
         if inv.total is None:
             self.on_log("[可用骰子·决策前] 识别失败，跳过零骰停机检查")
             return True
-        if int(inv.total) == 0:
-            self._request_stop_from_loop(
-                "本轮未结束但可用骰子数为 0，已停止脚本"
+        if int(inv.total) > 0:
+            return True
+        if roll_kind == "free":
+            self.on_log(
+                "[可用骰子·决策前] 可用骰子为 0，但投骰按钮为免费骰，"
+                "仍可再投一次，继续"
             )
-            return False
-        return True
+            return True
+        label = {"paid": "付费骰", "start": "START"}.get(
+            roll_kind or "", "未识别（按付费处理）"
+        )
+        self._request_stop_from_loop(
+            f"本轮未结束、可用骰子数为 0，投骰按钮={label}，已停止脚本"
+        )
+        return False
 
     def _should_retry_after_same_cell(self, cell_id: int | None) -> bool:
         """操作后连续同格：未达阈值则等待；达阈值则应重放上次动作。"""
@@ -683,69 +653,6 @@ class ScriptSession:
         _ = boot.message
         self._request_stop_from_loop("大冒险框标定失败")
         return False
-
-    def _execute_resume_replan(self) -> bool:
-        """继续后：仅识别格子+骰子，用本地手牌规划（不识别幸运卡槽、不同步卡池）。"""
-        if self._pause_requested.is_set():
-            return True
-        if self._stop_requested.is_set():
-            self._resume_replan = False
-            self.on_log("[停止] 继续前收到停止请求。")
-            return False
-
-        timing_on = should_log_recognition_timing()
-        capture_ms: float | None = None
-        if timing_on:
-            t_cap = time.perf_counter()
-        frame = self._capture_frame()
-        if timing_on:
-            capture_ms = (time.perf_counter() - t_cap) * 1000.0
-        if frame is None:
-            self.on_log("[继续] 无法截屏，稍后重试…")
-            return True
-        if self._is_dim(frame):
-            self.on_log("[继续] 画面仍变暗，等待恢复后再识别格子/骰子…")
-            return True
-
-        hand = list(self._local_hand or [])
-        rec = recognize_cell_and_dice(
-            frame,
-            self.regions,
-            hand_ids=hand,
-            anchor_cell_id=self._last_acted_cell,
-        )
-        self._log_recognition_timing("继续识别", rec, capture_ms=capture_ms)
-        rec = replace(rec, lucky_matches=list(self._last_lucky_matches))
-        if self._stop_requested.is_set():
-            self._resume_replan = False
-            return False
-
-        if self._waiting_new_round_dice:
-            if rec.cell_id is not None:
-                self.on_cell(rec.cell_id)
-            self._resume_replan = False
-            return True
-
-        cell_id = rec.cell_id
-        if cell_id is None:
-            if not self._recalib_frame_on_cell_miss():
-                self._resume_replan = False
-                return False
-            self.on_log("[继续] 未能识别格子，稍后重试…")
-            return True
-
-        hand = list(self._local_hand or [])
-        self.on_cell(cell_id)
-        self.on_lucky_cards(format_owned_lucky_cards(hand))
-        if not self._gate_inventory_dice_before_decision(frame):
-            self._resume_replan = False
-            return False
-        self._resume_replan = False
-        self.on_log(
-            f"[继续] 识别 格子={cell_id} 剩余骰子={rec.dice_remaining}"
-            f"｜手牌={format_owned_lucky_cards(hand)}",
-        )
-        return self._plan_and_act(rec, cell_id=cell_id)
 
     def _notify_calibration_changed(self) -> None:
         self.on_calibration_changed()
@@ -863,7 +770,6 @@ class ScriptSession:
         cal = clear_deck_pool_for_round_end()
         self._round_end_finalized = True
         self._local_hand = []
-        self._last_lucky_matches = []
         self.on_lucky_cards(format_owned_lucky_cards([]))
         _ = cal
         self.on_log("[本局结束] 已清空幸运卡池与手牌")
@@ -885,8 +791,6 @@ class ScriptSession:
         self._last_acted_cell = None
         self._same_cell_streak = 0
         self._last_action = None
-        self._last_lucky_matches = []
-        self._resume_replan = False
 
     def _request_stop_from_loop(self, reason: str, *, kind: str = "") -> None:
         """后台循环内请求停止（不 join，避免死锁）。
@@ -897,9 +801,7 @@ class ScriptSession:
             return
         self._stop_reason_kind = kind
         self._stop_requested.set()
-        self._resume_replan = False
         self._waiting_new_round_dice = False
-        self._pending_new_round_start = False
         self._stop.set()
         self.on_log(f"[停止] {reason}，自动点击已停止。")
         self.on_auto_stopped()

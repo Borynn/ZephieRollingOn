@@ -264,48 +264,6 @@ def check_resources() -> list[Check]:
 # Capture
 # ---------------------------------------------------------------------------
 
-def _test_window_candidates(limit: int = 6) -> list[int]:
-    """按面积从大到小列出可作截屏测试的窗口（排除本工具自身）。
-
-    WGC **无法捕获所有窗口**：资源管理器（``CabinetWClass``）这类窗口在转换
-    ``GraphicsCaptureItem`` 时会直接失败。所以不能只挑「最大的那个」就下结论——
-    否则自检最关键的取证行（实际截屏测试）反而成了误报来源。
-    调用方应对候选逐一尝试，任一成功即算通过。
-    """
-    try:
-        import win32gui
-
-        from zephie_rolling_on.vision.win32_window import is_our_tool_window
-    except Exception:
-        return []
-
-    found: list[tuple[int, int]] = []  # (area, hwnd)
-
-    def _cb(hwnd: int, _extra) -> bool:
-        try:
-            if not win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd):
-                return True
-            if not win32gui.GetWindowText(hwnd):
-                return True
-            if is_our_tool_window(hwnd):
-                return True
-            left, top, right, bottom = win32gui.GetClientRect(hwnd)
-            w, h = right - left, bottom - top
-            if w < 640 or h < 480:
-                return True
-            found.append((w * h, int(hwnd)))
-        except Exception:
-            pass
-        return True
-
-    try:
-        win32gui.EnumWindows(_cb, None)
-    except Exception:
-        return []
-    found.sort(reverse=True)
-    return [hwnd for _area, hwnd in found[: max(1, int(limit))]]
-
-
 def _bound_game_window() -> tuple[int, str] | None:
     """读取界面绑定的游戏窗口（``config/game_window.yaml``），返回 ``(hwnd, 标题)``。
 
@@ -352,24 +310,6 @@ def _bound_game_window() -> tuple[int, str] | None:
     return None
 
 
-def _capture_candidates() -> list[tuple[int, bool]]:
-    """截屏测试的目标窗口，``(hwnd, 是否绑定的游戏窗口)``。
-
-    游戏窗口排在最前：它的成败才是用户关心的结论。其余大窗口作为补充候选，
-    用来区分「这一个窗口不可捕获」与「截屏功能整体异常」。
-    """
-    out: list[tuple[int, bool]] = []
-    bound = _bound_game_window()
-    if bound is not None:
-        out.append((bound[0], True))
-    seen = {hwnd for hwnd, _ in out}
-    for hwnd in _test_window_candidates():
-        if hwnd not in seen:
-            seen.add(hwnd)
-            out.append((hwnd, False))
-    return out
-
-
 def check_capture() -> list[Check]:
     out: list[Check] = []
     try:
@@ -381,8 +321,15 @@ def check_capture() -> list[Check]:
 
         build = windows_build()
         if wgc_supported():
+            # 这一行只代表「扩展能导入」，不代表会话真能建起来（Win10 那次
+            # IsBorderRequired 事故就是导入成功、会话全失败）。所以措辞留余地，
+            # 真正的可用性由下面的「WGC 会话实测」给出。
             out.append(
-                Check(OK, "截屏后端", f"Windows Graphics Capture 可用（内部版本 {build}）")
+                Check(
+                    OK,
+                    "截屏后端",
+                    f"Windows Graphics Capture 支持（内部版本 {build}；扩展导入成功）",
+                )
             )
         else:
             # 把真实原因写进报告：以前只说「无 WGC」，无法区分版本不足与导入失败
@@ -398,68 +345,74 @@ def check_capture() -> list[Check]:
     except Exception as exc:  # noqa: BLE001
         out.append(Check(FAIL, "截屏后端", f"{type(exc).__name__}: {exc}"))
 
-    # 实测一次：真正截一张图，才算证据。
-    # 优先测**用户绑定的游戏窗口**——那才是用户关心的结论；其余大窗口作为补充，
-    # 用来区分「这一个窗口不可捕获」（如资源管理器）与「截屏功能整体异常」。
-    candidates = _capture_candidates()
-    if not candidates:
+    # 只测**绑定的游戏窗口**：那才是用户真正关心的结论，也是实际会被捕获的目标。
+    # 以前还会顺带试最多 6 个其它大窗口，但 WGC 对资源管理器这类窗口本就不支持，
+    # 逐窗重试既把结论弄成误报、又把同一条失败路径反复触发——而「会话创建失败」
+    # 是机器级条件、与窗口无关，重试没有任何意义。
+    bound = _bound_game_window()
+    if bound is None:
         out.append(
             Check(
                 WARN,
                 "实际截屏测试",
-                "未找到可用于测试的窗口（先在界面绑定游戏窗口，或打开任意窗口后重试）",
+                "未绑定游戏窗口，无法实测（先在界面绑定游戏窗口后重跑自检）",
             )
         )
         return out
 
-    try:
-        import win32gui
+    hwnd, title = bound
+    label = f"绑定的游戏窗口「{(title or '').strip()[:24] or '(无标题)'}」"
 
+    # 单独实测一次「会话能否创建」。截屏失败的原因是多层的（会话创建 / 取帧超时 /
+    # 画面判空），而 wgc_supported() 只证明扩展能导入，所以把这一层单独查出来，
+    # 避免再出现「报告说 WGC 可用、实际每次截屏都失败」这种误导。
+    try:
+        from zephie_rolling_on.vision.capture_wgc import (
+            probe_wgc_session,
+            session_create_blocked,
+        )
+
+        ok, reason = probe_wgc_session(hwnd)
+        if ok:
+            out.append(Check(OK, "WGC 会话实测", f"{label}可创建 WGC 会话"))
+        else:
+            out.append(Check(FAIL, "WGC 会话实测", f"{label}创建失败：{reason}"))
+        # 熔断状态单独报告：运行时降级到桌面裁切是**静默**的，用户不会看到任何
+        # 提示，只有这里能查出「WGC 其实已被停用」。
+        if session_create_blocked(hwnd):
+            out.append(
+                Check(
+                    WARN,
+                    "WGC 重试状态",
+                    f"{label}本次绑定内已停止重试 WGC（连续失败达上限），"
+                    "运行时会改用桌面裁切、要求窗口不被遮挡；"
+                    "重新绑定游戏窗口即可重置（上面这行是绕过该限制实测的结果）",
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        out.append(Check(FAIL, "WGC 会话实测", f"{type(exc).__name__}: {exc}"))
+
+    # 再真正截一张图，才算「能工作」的证据。
+    try:
         from zephie_rolling_on.vision.capture import (
             capture_window_client,
             last_capture_failure_note,
         )
         from zephie_rolling_on.vision.capture_wgc import last_capture_method
 
-        failures: list[str] = []
-        game_failure = ""
-        for hwnd, is_game in candidates:
-            try:
-                title = win32gui.GetWindowText(hwnd) or "(无标题)"
-            except Exception:
-                title = "(未知)"
-            label = f"绑定的游戏窗口「{title}」" if is_game else f"「{title}」"
-            frame = capture_window_client(hwnd)
-            if frame is not None and getattr(frame, "size", 0) > 0:
-                h, w = frame.shape[:2]
-                level = OK
-                if game_failure:
-                    # 游戏窗口没截到、别的窗口却成功了 —— 说明是游戏窗口本身的问题
-                    level = WARN
-                out.append(
-                    Check(
-                        level,
-                        "实际截屏测试",
-                        f"用{label}测试，{last_capture_method()} 成功 {w}x{h}",
-                    )
+        frame = capture_window_client(hwnd)
+        if frame is not None and getattr(frame, "size", 0) > 0:
+            h, w = frame.shape[:2]
+            out.append(
+                Check(
+                    OK,
+                    "实际截屏测试",
+                    f"{label}测试，{last_capture_method()} 成功 {w}x{h}",
                 )
-                if game_failure:
-                    out.append(
-                        Check(WARN, "游戏窗口截屏", f"绑定的游戏窗口未通过：{game_failure}")
-                    )
-                return out
-            note = last_capture_failure_note() or "未返回图像"
-            failures.append(f"{label}：{note}")
-            if is_game:
-                game_failure = note
-
-        out.append(
-            Check(
-                WARN,
-                "实际截屏测试",
-                f"试了 {len(candidates)} 个窗口都失败。" + "；".join(failures[:2]),
             )
-        )
+        else:
+            note = last_capture_failure_note() or "未返回图像"
+            out.append(Check(WARN, "实际截屏测试", f"{label}：{note}"))
     except Exception as exc:  # noqa: BLE001
         out.append(Check(FAIL, "实际截屏测试", f"{type(exc).__name__}: {exc}"))
 

@@ -61,6 +61,42 @@ $rthTcl = Join-Path $Root "scripts\pyi_rth_tcl_tk.py"
 
 if (-not (Test-Path $iconIco)) { throw "Missing exe icon: $iconIco" }
 
+# 「不跳过白金锤子」模式依赖该模板：缺了它运行时只会静默退化成「跳过所有奖励」，
+# 用户看不到任何报错。所以在构建期就拦住，而不是等用户反馈。
+$hammerTpl = Join-Path $Root "assets\ui\platinum_hammer.png"
+if (-not (Test-Path $hammerTpl)) {
+    throw "Missing platinum hammer template: $hammerTpl"
+}
+
+# 源码 / 仓库门禁：打包前先过一遍，任一失败即中止。
+# 统一成一个函数，是因为它们都是「一份脚本 + 非 0 退出码」的同一形状；
+# 之前这些脚本彼此独立、既没有调用方也容易被忘记跑。
+function Invoke-Gate {
+    param(
+        [Parameter(Mandatory)][string] $Name,
+        # 输出里出现该标记说明只做了部分检查（例如缺私有词表时跳过词规则），
+        # 此时不算失败，但要明确告警——不能让它看起来像「全部通过」。
+        [string] $PartialMarker = ""
+    )
+    $gate = Join-Path $Root "scripts\$Name"
+    if (-not (Test-Path $gate)) { throw "gate script not found: $gate" }
+    Write-Host "Gate: $Name"
+    $out = & python $gate 2>&1
+    $code = $LASTEXITCODE
+    foreach ($line in $out) { Write-Host "  $line" }
+    if ($code -ne 0) { throw "gate failed: $Name (exit $code)" }
+    if ($PartialMarker -and (($out -join "`n") -match [regex]::Escape($PartialMarker))) {
+        Write-Warning "$Name reported $PartialMarker — part of its checks were skipped"
+    }
+}
+
+Invoke-Gate "check_undefined_names.py"
+Invoke-Gate "check_image_io.py"
+Invoke-Gate "check_gitignore.py"
+# 私有词表是 gitignored 的：本地有、全新克隆（含 CI）没有。缺词表时该门禁
+# 会报 INDEPENDENCE_SKIPPED 并返回 0，属于设计内降级，所以只告警不中止。
+Invoke-Gate "audit_independence.py" -PartialMarker "INDEPENDENCE_SKIPPED"
+
 # Avoid host conda base Tcl leaking into the frozen app search path.
 $env:TCL_LIBRARY = $null
 $env:TK_LIBRARY = $null

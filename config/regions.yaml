@@ -154,6 +154,18 @@ execute_task_button:
     height: 530
   match_threshold: 0.72
 
+# 「不跳过白金锤子」模式用：在同一个 H 格奖励弹窗上找白金锤子图标。
+# 搜索区暂与 execute_task_button 相同（同一弹窗）；拿到截图后应按实际位置收窄，
+# 区域越小越快、越不易误判。阈值也待用调试图的 best_score 校准。
+platinum_hammer:
+  template: assets/ui/platinum_hammer.png
+  search:
+    left: 228
+    top: 148
+    width: 960
+    height: 530
+  match_threshold: 0.72
+
 # 本局冒险完成：灰屏 + 「已完成冒险。」横幅
 # search 在 resolve_regions 时强制与 execute_task_button.search 相同（勿单独改此处期望生效）
 adventure_complete_banner:

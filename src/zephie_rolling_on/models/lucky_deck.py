@@ -229,34 +229,9 @@ def sync_deck_from_new_hand_cards(
     return recorded
 
 
-def is_dice_exhausted_ocr(
-    *,
-    dice_used: int | None,
-    dice_remaining: int | None,
-    dice_total: int = DEFAULT_DICE_REMAINING,
-) -> bool:
-    """OCR 判定本局投掷已用尽（已用=dice_total 或剩余=0）。"""
-    if dice_remaining is not None and int(dice_remaining) <= 0:
-        return True
-    if dice_used is not None and int(dice_used) >= int(dice_total):
-        return True
-    return False
-
-
 def is_round_end_by_start(*, roll_kind: str | None) -> bool:
     """亮屏检测到 START 按钮 → 本局结束（与骰子数无关）。"""
     return roll_kind == "start"
-
-
-def is_round_end_by_paid_exhausted(
-    *,
-    dice_used: int | None,
-    dice_remaining: int | None,
-    roll_kind: str | None,
-    dice_total: int = DEFAULT_DICE_REMAINING,
-) -> bool:
-    """Alias: round end is decided by START roll kind only."""
-    return is_round_end_by_start(roll_kind=roll_kind)
 
 
 def is_new_round_dice_ready(
@@ -271,22 +246,6 @@ def is_new_round_dice_ready(
     if dice_used is not None and int(dice_used) <= 0:
         return True
     return False
-
-
-def maybe_clear_deck_pool_on_dice_exhausted(
-    *,
-    dice_used: int | None,
-    dice_remaining: int | None,
-    dice_total: int = DEFAULT_DICE_REMAINING,
-) -> PlannerCalibration | None:
-    """骰子用尽时重置幸运卡池（drawn_counts 清零）。未用尽或 OCR 无效时返回 None。"""
-    if not is_dice_exhausted_ocr(
-        dice_used=dice_used,
-        dice_remaining=dice_remaining,
-        dice_total=dice_total,
-    ):
-        return None
-    return clear_deck_pool_for_round_end()
 
 
 def clear_deck_pool_for_round_end() -> PlannerCalibration:

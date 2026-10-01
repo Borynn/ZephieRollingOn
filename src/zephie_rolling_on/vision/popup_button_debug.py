@@ -104,6 +104,20 @@ def save_execute_task_button_debug(
     )
 
 
+def save_platinum_hammer_debug(
+    frame: np.ndarray,
+    config: dict[str, Any],
+) -> tuple[dict[str, Path], PopupButtonProbe | None]:
+    """保存白金锤子检测调试图（用于校准搜索区与阈值）。"""
+    return save_popup_button_debug(
+        frame,
+        config,
+        "platinum_hammer",
+        default_template="assets/ui/platinum_hammer.png",
+        debug_prefix="platinum_hammer",
+    )
+
+
 def save_adventure_complete_banner_debug(
     frame: np.ndarray,
     config: dict[str, Any],

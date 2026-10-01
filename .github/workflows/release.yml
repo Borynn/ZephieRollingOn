@@ -59,6 +59,15 @@ jobs:
         shell: pwsh
         run: python scripts/check_lock.py
 
+      # `py_compile` only checks syntax, and importing a module does not execute
+      # its function bodies — so a name typo (e.g. using `skip_ex` after the
+      # variable became `skip_ex_mode`) slips through both. Inside a Tk callback
+      # the NameError lands on stderr and the callback is silently dropped, which
+      # is how the UI once froze on「准备中…」. Catch it before packaging.
+      - name: Check for undefined names
+        shell: pwsh
+        run: python scripts/check_undefined_names.py
+
       # The lock, not requirements.txt: the latter states only lower bounds, so
       # builds would drift as new releases appear. The lock also carries the build
       # toolchain (PyInstaller, setuptools) so CI and local agree exactly.
@@ -117,7 +126,9 @@ jobs:
             "map.xlsx", "LICENSE", "NOTICE",
             "docs/USER_README_ZH.txt",
             "decision_models/vela_v4.1.vpk",
-            "decision_models/zephie_m1_points.zm"
+            "decision_models/zephie_m1_points.zm",
+            # 「不跳过白金锤子」模式依赖它；缺失时运行时只会静默退化成跳过所有奖励
+            "assets/ui/platinum_hammer.png"
           )
           $missing = $required | Where-Object { -not (Test-Path $_) }
           if ($missing) { throw "missing required files: $($missing -join ', ')" }

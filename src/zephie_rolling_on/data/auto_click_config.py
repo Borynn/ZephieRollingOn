@@ -25,9 +25,19 @@ PROJECT_ROOT = project_root()
 AUTO_CLICK_CONFIG_PATH = PROJECT_ROOT / "config" / "auto_click.yaml"
 AUTO_CLICK_DEFAULT_PATH = PROJECT_ROOT / "config" / "auto_click.default.yaml"
 
+# 感叹号格奖励的处理模式，存在 skip_exclamation_reward 键下。
+#
+# 键名沿用历史命名（旧值是 bool），**值改为三态字符串**：一个键、不产生两份配置，
+# 旧配置读得动（见 normalize_skip_exclamation_mode）。
+SKIP_ALL = "skip_all"  # 默认：三连点跳过所有奖励（= 旧 true）
+SKIP_NONE = "skip_none"  # 不跳过任何奖励：检测到执行任务按钮即停（= 旧 false）
+SKIP_EXCEPT_HAMMER = "skip_except_hammer"  # 不跳过白金锤子：检测到锤子才停，否则跳过
+
+SKIP_MODES: tuple[str, ...] = (SKIP_ALL, SKIP_NONE, SKIP_EXCEPT_HAMMER)
+
 # Used only when neither file exists (e.g. a stripped deployment).
 _FALLBACK: dict = {
-    "skip_exclamation_reward": True,
+    "skip_exclamation_reward": SKIP_ALL,
     "skip_animation_via_f12": True,
     "auto_replenish_dice": True,
     "block_mouse_in_game": False,
@@ -324,14 +334,30 @@ def load_new_round_animation_wait_ms(path: Path | None = None) -> float:
     )
 
 
-def load_skip_exclamation_reward(path: Path | None = None) -> bool:
+def normalize_skip_exclamation_mode(raw: object) -> str:
+    """把配置值归一化成三态字符串。
+
+    旧格式是 bool（``true``=跳过、``false``=不跳过），映射成 ``SKIP_ALL`` /
+    ``SKIP_NONE``；未知值兜底为 ``SKIP_ALL``，与历史默认行为一致。
+    """
+    if isinstance(raw, bool):
+        return SKIP_ALL if raw else SKIP_NONE
+    if raw in SKIP_MODES:
+        return str(raw)
+    return SKIP_ALL
+
+
+def load_skip_exclamation_mode(path: Path | None = None) -> str:
+    """读取感叹号格奖励的处理模式（三态字符串）。"""
     if path is None:
         from zephie_rolling_on.app.runtime_state import get_runtime
 
         rt = get_runtime()
         if rt is not None:
-            return bool(rt.skip_exclamation_reward)
-    return bool(load_auto_click_config(path).get("skip_exclamation_reward", False))
+            return normalize_skip_exclamation_mode(rt.skip_exclamation_mode)
+    return normalize_skip_exclamation_mode(
+        load_auto_click_config(path).get("skip_exclamation_reward", SKIP_ALL)
+    )
 
 
 def load_skip_animation_via_f12(path: Path | None = None) -> bool:
@@ -369,18 +395,20 @@ def skip_animation_effective(path: Path | None = None) -> bool:
     return bool(load_skip_animation_via_f12(path)) and not _skip_animation_resolution_block
 
 
-def save_skip_exclamation_reward(enabled: bool, path: Path | None = None) -> Path:
+def save_skip_exclamation_mode(mode: str, path: Path | None = None) -> Path:
+    """保存感叹号格奖励的处理模式（三态字符串）。"""
+    mode = normalize_skip_exclamation_mode(mode)
     if path is None:
         from zephie_rolling_on.app.runtime_state import get_runtime
 
         rt = get_runtime()
         if rt is not None:
-            rt.skip_exclamation_reward = bool(enabled)
+            rt.skip_exclamation_mode = mode
             return AUTO_CLICK_CONFIG_PATH
     p = path or AUTO_CLICK_CONFIG_PATH
     p.parent.mkdir(parents=True, exist_ok=True)
     data = load_auto_click_config(p)
-    data["skip_exclamation_reward"] = bool(enabled)
+    data["skip_exclamation_reward"] = mode
     with p.open("w", encoding="utf-8") as f:
         yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
     return p

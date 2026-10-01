@@ -30,7 +30,8 @@ class RuntimeState:
         }
     )
     # 自动点击开关（多开时各界面独立，不抢写 auto_click.yaml）
-    skip_exclamation_reward: bool = False
+    # 感叹号格奖励处理模式：skip_all / skip_none / skip_except_hammer，见 auto_click_config
+    skip_exclamation_mode: str = "skip_all"
     skip_animation_via_f12: bool = True
     auto_replenish_dice: bool = True
     # 统一连点间隔（ms）；界面改动会写回 auto_click.yaml
@@ -53,7 +54,7 @@ class RuntimeState:
             load_click_interval_jitter_ms as _load_click_jitter_disk,
             load_click_interval_ms as _load_click_interval_disk,
             load_skip_animation_via_f12 as _load_skip_anim_disk,
-            load_skip_exclamation_reward as _load_skip_ex_disk,
+            load_skip_exclamation_mode as _load_skip_ex_disk,
         )
         from zephie_rolling_on.ui.hotkey_config import (
             ALL_ACTIONS,
@@ -115,7 +116,7 @@ class RuntimeState:
             calibration=cal,
             adventure_anchor=(int(anchor[0]), int(anchor[1])),
             game_window=gw,
-            skip_exclamation_reward=skip_ex,
+            skip_exclamation_mode=skip_ex,
             skip_animation_via_f12=skip_anim,
             auto_replenish_dice=auto_replenish,
             click_interval_ms=click_interval,
@@ -132,7 +133,7 @@ class RuntimeState:
             ),
             adventure_anchor=(int(self.adventure_anchor[0]), int(self.adventure_anchor[1])),
             game_window=dict(self.game_window),
-            skip_exclamation_reward=bool(self.skip_exclamation_reward),
+            skip_exclamation_mode=str(self.skip_exclamation_mode),
             skip_animation_via_f12=bool(self.skip_animation_via_f12),
             auto_replenish_dice=bool(self.auto_replenish_dice),
             click_interval_ms=int(self.click_interval_ms),

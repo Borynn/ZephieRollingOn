@@ -448,6 +448,352 @@ class ZephieMinimalCheck(tk.Frame):
 AnimeCheckbutton = ZephieMinimalCheck
 
 
+class ZephieSelect(tk.Frame):
+    """简约圆角下拉框：左侧文案 + 右侧下拉（Canvas 绘制，与主题一致）。
+
+    用法::
+
+        var = tk.StringVar(value="skip_all")
+        ZephieSelect(
+            parent,
+            "跳过感叹号格奖励:",
+            values=[("跳过所有奖励", "skip_all"), ("不跳过任何奖励", "skip_none")],
+            variable=var,
+            command=on_change,
+        )
+
+    ``variable`` 存的是**值**（如 ``skip_all``），界面显示对应的**文案**——
+    这样调用方不必再维护一份「文案 ↔ 值」映射。
+    """
+
+    _ROW_H = 26
+    _RADIUS = 8
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        text: str,
+        *,
+        values: list[tuple[str, str]],
+        variable: tk.StringVar | None = None,
+        command: Callable[..., Any] | None = None,
+        bg: str | None = None,
+        fg: str | None = None,
+        font: tuple | None = None,
+        width: int = 168,
+        height: int = 30,
+        **kwargs: Any,
+    ) -> None:
+        parent_bg = bg or parent.cget("bg")
+        super().__init__(parent, bg=parent_bg, highlightthickness=0, **kwargs)
+        self._values = list(values)
+        self.var = (
+            variable
+            if variable is not None
+            else tk.StringVar(value=self._values[0][1] if self._values else "")
+        )
+        self._command = command
+        self._enabled = True
+        self._hover = False
+        self._popup: tk.Toplevel | None = None
+        self._fg = fg or COLORS["text"]
+        self._font = font or cute_font(9, bold=False)
+        self._width = int(width)
+        self._height = int(height)
+
+        self._lbl = tk.Label(
+            self,
+            text=text,
+            bg=parent_bg,
+            fg=self._fg,
+            font=self._font,
+            anchor="w",
+            cursor="hand2",
+        )
+        self._lbl.pack(side="left")
+        self._cv = tk.Canvas(
+            self,
+            width=self._width,
+            height=self._height,
+            bg=parent_bg,
+            highlightthickness=0,
+            cursor="hand2",
+        )
+        # 紧贴文本之后（不用 expand 撑开，否则会被推到最右侧）
+        self._cv.pack(side="left", padx=(8, 0))
+        # 文案与下拉框**都要**能点：只把下拉框做成热区时，用户很自然会去点文字，
+        # 那时候毫无反应，看起来就像「点不动」。
+        for widget in (self._lbl, self._cv):
+            widget.bind("<Button-1>", self._on_click)
+            widget.bind("<Enter>", self._on_enter)
+            widget.bind("<Leave>", self._on_leave)
+
+        try:
+            self.var.trace_add("write", lambda *_a: self._draw())
+        except tk.TclError:
+            self.var.trace("w", lambda *_a: self._draw())
+        self._draw()
+
+    # -- 取值 --
+
+    def get(self) -> str:
+        return str(self.var.get())
+
+    def set(self, value: str) -> None:
+        """选中指定值；值变化时触发 command（同值不重复触发）。"""
+        value = str(value)
+        changed = value != str(self.var.get())
+        self.var.set(value)
+        self._draw()
+        if changed and self._command:
+            self._command()
+
+    def _selected_label(self) -> str:
+        cur = str(self.var.get())
+        for label, value in self._values:
+            if value == cur:
+                return label
+        return self._values[0][0] if self._values else ""
+
+    # -- 绘制 --
+
+    def _draw(self) -> None:
+        cv = self._cv
+        cv.delete("all")
+        w, h = self._width, self._height
+        r = self._RADIUS
+        points = [
+            r, 1, w - r, 1, w - 1, 1, w - 1, r,
+            w - 1, h - r, w - 1, h - 1, w - r, h - 1, r, h - 1,
+            1, h - 1, 1, h - r, 1, r, 1, 1,
+        ]
+        if not self._enabled:
+            fill = COLORS["entry_bg"]
+        elif self._hover or self._popup is not None:
+            fill = COLORS["primary_light"]
+        else:
+            fill = "#FFFFFF"
+        cv.create_polygon(
+            points,
+            fill=fill,
+            outline=COLORS["border"],
+            width=1.2,
+            smooth=True,
+        )
+        cv.create_text(
+            10,
+            h // 2,
+            text=self._selected_label(),
+            anchor="w",
+            fill=self._fg if self._enabled else COLORS["faint"],
+            font=self._font,
+            width=max(20, w - 34),
+        )
+        cv.create_text(
+            w - 13,
+            h // 2,
+            text="▾",
+            anchor="center",
+            fill=COLORS["muted"] if self._enabled else COLORS["faint"],
+            font=self._font,
+        )
+
+    # -- 下拉 --
+
+    def _popup_alive(self) -> bool:
+        """弹层是否还活着。
+
+        override-redirect 窗口不受 Tk 生命周期保护，可能被窗口管理器直接销毁，
+        而 ``_popup`` 仍指向它。这种情况必须复位，否则每次点击都只走 ``_close()``，
+        表现就是「下拉框点不开」。
+        """
+        if self._popup is None:
+            return False
+        try:
+            if bool(self._popup.winfo_exists()):
+                return True
+        except tk.TclError:
+            pass
+        self._popup = None
+        return False
+
+    def _on_click(self, _e: tk.Event | None = None) -> None:
+        if not self._enabled:
+            return
+        if self._popup_alive():
+            self._close()
+            return
+        self._open()
+
+    def _open(self) -> None:
+        if not self._values or self._popup_alive():
+            return
+        top = tk.Toplevel(self)
+        self._popup = top
+        top.overrideredirect(True)
+        top.configure(bg=COLORS["border"])
+        try:
+            top.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+
+        self.update_idletasks()
+        x = self._cv.winfo_rootx()
+        y = self._cv.winfo_rooty() + self._cv.winfo_height()
+
+        lb = tk.Listbox(
+            top,
+            bg="#FFFFFF",
+            fg=self._fg,
+            # 比正文略大一号：Listbox 行高由字体决定，9pt 时只有约 17px，太挤
+            font=cute_font(10, bold=False),
+            # 高度必须显式设为选项个数：Listbox 默认 10 行，不设就会留一大片空白
+            height=max(1, len(self._values)),
+            selectmode=tk.BROWSE,
+            activestyle="none",
+            highlightthickness=0,
+            bd=0,
+            relief="flat",
+            # 选中不变色（只靠关闭状态的显示值来表达当前选择）；悬停才变色。
+            # 因此把选中色设成与普通行一致，避免 Listbox 原生高亮干扰。
+            selectbackground="#FFFFFF",
+            selectforeground=self._fg,
+        )
+        cur = str(self.var.get())
+        for i, (label, value) in enumerate(self._values):
+            lb.insert(tk.END, label)
+            if value == cur:
+                lb.selection_set(i)
+                lb.see(i)
+        lb.pack(fill="both", expand=True, padx=2, pady=2)
+
+        # 弹层高度必须按 Listbox 的**实测**高度算：它的行高由字体决定，用
+        # 假定的常量算会多出空白（9pt 时每行只有 17px，而非 26px）。
+        top.update_idletasks()
+        box_h = lb.winfo_reqheight() + 4
+        # 下方放不下就翻到上方，避免列表跑到屏幕外
+        try:
+            if y + box_h > self.winfo_screenheight():
+                y = max(0, self._cv.winfo_rooty() - box_h)
+        except tk.TclError:
+            pass
+        top.geometry(f"{self._width}x{box_h}+{x}+{y}")
+
+        # 逐行悬停变色。Listbox 没有原生的行悬停，只能自己按鼠标位置刷该项底色；
+        # 离开/移动时把上一行还原（选中行还原成选中色，否则失去选中反馈）。
+        hover = {"idx": -1}
+
+        def _on_motion(e: tk.Event) -> None:
+            idx = int(lb.nearest(int(e.y)))
+            if idx == hover["idx"]:
+                return
+            self._paint_row(lb, hover["idx"], hovered=False)
+            hover["idx"] = idx
+            self._paint_row(lb, idx, hovered=True)
+
+        def _on_list_leave(_e: tk.Event) -> None:
+            self._paint_row(lb, hover["idx"], hovered=False)
+            hover["idx"] = -1
+
+        lb.bind("<Motion>", _on_motion)
+        lb.bind("<Leave>", _on_list_leave)
+
+        def _pick(_e: tk.Event | None = None) -> None:
+            sel = lb.curselection()
+            if sel:
+                self.set(self._values[int(sel[0])][1])
+            self._close()
+
+        lb.bind("<ButtonRelease-1>", _pick)
+        lb.bind("<Return>", _pick)
+        # grab 会把外部点击也送到本窗口，这里据此关闭（否则点别处关不掉）
+        top.bind("<Button-1>", lambda e: self._close() if e.widget is top else None)
+        top.bind("<Escape>", lambda _e: self._close())
+        # 故意**不**绑 <FocusOut>：override-redirect 窗口上的焦点事件很不可靠，
+        # lb.focus_set() 或窗口管理器的一次焦点抖动都会立刻触发关闭，表现就是
+        # 「点一下就闪没了 / 点不动」。点外部关闭已由上面的 grab + Button-1 覆盖。
+        try:
+            top.grab_set()
+        except tk.TclError:
+            pass
+        try:
+            top.deiconify()
+            top.lift()
+        except tk.TclError:
+            pass
+        lb.focus_set()
+
+    def _paint_row(self, lb: tk.Listbox, idx: int, *, hovered: bool) -> None:
+        """给弹层某一行上色：悬停变色，其余一律白底。
+
+        选中行**不变色**（当前选择由关闭状态显示的文字表达）。
+
+        单独成方法而非内联闭包，是为了能直接测（合成鼠标事件在这里不可靠：
+        Tk 把指针事件发给指针所在窗口，不一定是被调用的控件）。
+        """
+        if idx < 0:
+            return
+        if hovered:
+            bg, fg = COLORS["primary_light"], COLORS["primary_dark"]
+        else:
+            bg, fg = "#FFFFFF", self._fg
+        try:
+            lb.itemconfig(idx, background=bg, foreground=fg)
+        except tk.TclError:
+            pass
+
+    def _close(self) -> None:
+        top = self._popup
+        self._popup = None
+        if top is None:
+            self._draw()
+            return
+        try:
+            top.grab_release()
+        except tk.TclError:
+            pass
+        try:
+            top.destroy()
+        except tk.TclError:
+            pass
+        self._draw()
+
+    # -- 悬停 --
+
+    def _on_enter(self, _e: tk.Event) -> None:
+        if not self._enabled:
+            return
+        self._hover = True
+        self._draw()
+
+    def _on_leave(self, _e: tk.Event) -> None:
+        self._hover = False
+        self._draw()
+
+    # -- 兼容 RoundedButton / ZephieMinimalCheck 的 config 用法 --
+
+    def configure(self, cnf: Any = None, **kw: Any) -> Any:  # type: ignore[override]
+        if cnf and isinstance(cnf, dict):
+            kw = {**cnf, **kw}
+        elif cnf is not None and not isinstance(cnf, dict):
+            return super().configure(cnf)
+        state = kw.pop("state", None)
+        text = kw.pop("text", None)
+        if state is not None:
+            self._enabled = str(state) in ("normal", "active", tk.NORMAL)
+            self._cv.config(cursor="hand2" if self._enabled else "")
+            self._lbl.config(fg=self._fg if self._enabled else COLORS["faint"])
+            if not self._enabled:
+                self._close()
+            self._draw()
+        if text is not None:
+            self._lbl.config(text=str(text))
+        return super().configure(**kw) if kw else None
+
+    config = configure  # type: ignore[assignment]
+
+
+
 def cute_font(size: int, *, bold: bool = True) -> tuple:
     """优先圆体；缺省回退雅黑。须在已有 Tk 根窗口后调用以枚举字体。"""
     # 中文优先圆体/雅黑；Comic Sans 仅作西文回退（排在雅黑后，避免中文界面误选）

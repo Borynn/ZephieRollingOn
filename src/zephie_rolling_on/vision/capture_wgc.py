@@ -32,6 +32,86 @@ def _set_failure_reason(reason: str) -> None:
     _WGC_FAILURE_REASON = reason
 
 
+# ``draw_border=False`` 会走 ``GraphicsCaptureSession.SetIsBorderRequired``。该属性
+# 由 **Windows 10 版本 2104（内部版本 20348）** 引入（微软文档原文；常被简化成
+# 「Win11 才有」，不准确）。上游 windows-capture 的判定是**属性是否存在**：
+#
+#     if draw_border_settings != DrawBorderSettings::Default {
+#         if Self::is_border_settings_supported()? { ...SetIsBorderRequired(...)  }
+#         else { return Err(Error::BorderConfigUnsupported); }
+#     }
+#
+# 关键是那个 ``!= Default`` 判断：传 ``True``（WithBorder）**同样**会走进这段、
+# 在缺该属性的系统上返回 ``BorderConfigUnsupported``。所以**唯一安全的选择是
+# 不传该参数**（即 Default），而不是改传 True。
+#
+# 后果：不传参数时上述整段被跳过，Win10 上照常工作（该版本本就无法关闭边框，
+# 是系统限制而非缺陷）。
+WGC_BORDER_MIN_BUILD = 20348
+
+# 本进程内已确认「边框参数不被支持」。版本判断若不准、或上游改了行为，靠它自愈，
+# 避免每次截图都重撞一次同样的异常。
+_border_param_unsupported = False
+
+# 同一 hwnd 的**会话创建连续失败**次数上限。会话创建失败通常是机器级或窗口级条件
+# （缺 API、窗口类型不被支持），而运行时每次 poll 都会重新尝试创建——最坏情况
+# 约 30 次/分钟，纯属空转。达到上限后不再尝试，直接走桌面裁切回退。
+# 成功创建一次即清零（说明条件不再成立）；重新绑定窗口也清零，见
+# ``reset_session_create_attempts``。
+_MAX_SESSION_CREATE_ATTEMPTS = 3
+
+# hwnd -> 连续创建失败次数
+_CREATE_FAILS: dict[int, int] = {}
+
+
+def _note_create_failure(key: int) -> None:
+    _CREATE_FAILS[key] = _CREATE_FAILS.get(key, 0) + 1
+
+
+def reset_session_create_attempts(hwnd: int | None = None) -> None:
+    """清零会话创建的重试计数；``None`` 表示全部。
+
+    由界面在**重新绑定游戏窗口**时调用。即便绑回的是同一个窗口也应当清零：用户
+    重新绑定往往正是因为上一次不可用（换了窗口形态、改了系统版本、装了更新），
+    此时旧计数已不代表现状。
+    """
+    with _WGC_CAPTURE_LOCK:
+        if hwnd is None:
+            _CREATE_FAILS.clear()
+        else:
+            _CREATE_FAILS.pop(int(hwnd), None)
+
+
+def session_create_blocked(hwnd: int) -> bool:
+    """该 hwnd 是否已因连续失败而停止重试（运行时会被降级到桌面裁切）。"""
+    return int(_CREATE_FAILS.get(int(hwnd), 0)) >= _MAX_SESSION_CREATE_ATTEMPTS
+
+
+def _suppress_border_param() -> None:
+    """标记本机不支持边框参数；此后构造会话都不再传它。"""
+    global _border_param_unsupported
+    _border_param_unsupported = True
+
+
+def _border_kwargs() -> dict[str, bool]:
+    """``WindowsCapture`` 的边框参数；不支持时返回空（即不传该参数，保持 Default）。
+
+    传 ``True`` 不是安全的替代：上游只在 ``!= Default`` 时才做能力检查，明确要求
+    画边框同样会因缺该属性而返回 ``BorderConfigUnsupported``。见 ``WGC_BORDER_MIN_BUILD``。
+    """
+    if _border_param_unsupported:
+        return {}
+    try:
+        from zephie_rolling_on.vision.capture import windows_build
+
+        build = windows_build()
+    except Exception:
+        return {}
+    # 读不到版本号（0）时也不传：Win10 能正常工作，Win11 最多多一个黄框，
+    # 远比「会话直接失败」好。
+    return {"draw_border": False} if build >= WGC_BORDER_MIN_BUILD else {}
+
+
 def last_capture_method() -> str:
     return _LAST_CAPTURE_METHOD
 
@@ -168,8 +248,8 @@ class _WgcHwndSession:
 
         capture = WindowsCapture(
             cursor_capture=False,
-            draw_border=False,
             window_hwnd=self.hwnd,
+            **_border_kwargs(),
         )
 
         @capture.event
@@ -261,7 +341,9 @@ def release_wgc_session(hwnd: int | None = None) -> None:
         session.stop()
 
 
-def _get_or_create_session(hwnd: int) -> _WgcHwndSession | None:
+def _get_or_create_session(
+    hwnd: int, *, force: bool = False
+) -> _WgcHwndSession | None:
     key = int(hwnd)
     session = _SESSIONS.get(key)
     if session is not None and session.hwnd == key and session.alive:
@@ -269,15 +351,69 @@ def _get_or_create_session(hwnd: int) -> _WgcHwndSession | None:
     if session is not None:
         _SESSIONS.pop(key, None)
         session.stop()
+
+    # 连续失败达上限：不再尝试创建。桌面裁切回退仍然可用，而每次 poll 都重撞一次
+    # 注定失败的会话没有意义。重新绑定窗口会清零。
+    # ``force=True`` 供**自检**使用：诊断要拿到真正的失败原因，而不是「已停止重试」
+    # 这条结论本身——否则报告会把根因挡在后面。
+    if not force and _CREATE_FAILS.get(key, 0) >= _MAX_SESSION_CREATE_ATTEMPTS:
+        _set_failure_reason(
+            f"创建 WGC 会话已连续失败 {_MAX_SESSION_CREATE_ATTEMPTS} 次，"
+            "本次绑定内不再重试（重新绑定游戏窗口可重置）"
+        )
+        return None
+
     try:
         session = _WgcHwndSession(key)
     except Exception as exc:  # noqa: BLE001
-        _set_failure_reason(
-            f"创建 WGC 会话失败：{type(exc).__name__}: {exc}"
-        )
-        return None
+        first = f"{type(exc).__name__}: {exc}"
+        session = None
+        # 自愈：版本判断失准（或上游改了行为）时，从错误原文认出「边框参数不支持」，
+        # 去掉该参数重试一次，此后本进程不再传它。
+        if not _border_param_unsupported and "border" in first.lower():
+            _suppress_border_param()
+            try:
+                session = _WgcHwndSession(key)
+            except Exception as exc2:  # noqa: BLE001
+                _set_failure_reason(
+                    "创建 WGC 会话失败（已去掉边框参数重试）："
+                    f"{type(exc2).__name__}: {exc2}"
+                )
+                _note_create_failure(key)
+                return None
+            _set_method("wgc")
+        if session is None:
+            _set_failure_reason(f"创建 WGC 会话失败：{first}")
+            _note_create_failure(key)
+            return None
+    _CREATE_FAILS.pop(key, None)
     _SESSIONS[key] = session
     return session
+
+
+def probe_wgc_session(hwnd: int) -> tuple[bool, str]:
+    """实测能否为 ``hwnd`` 创建 WGC 会话；返回 ``(是否成功, 失败原因)``。
+
+    供自检使用。``is_wgc_available()`` 只证明扩展**能导入**，不代表会话真能创建
+    ——Win10 上 ``IsBorderRequired`` 缺失那次事故，自检就报着「WGC 可用」而实际
+    每次截屏都失败。真正建一次会话，结论才诚实。
+
+    **绕过「连续失败 3 次停止重试」的限制**：诊断要拿到真正的失败原因，而不是
+    「已停止重试」这条结论本身。运行时是否已被降级，由
+    ``session_create_blocked`` 另行报告。
+
+    不在此处释放会话：复用同一会话更便宜，由调用方（自检结束）统一释放。
+    """
+    _set_failure_reason("")
+    if not is_wgc_available():
+        from zephie_rolling_on.vision.capture import wgc_unsupported_reason
+
+        return False, wgc_unsupported_reason() or "WGC 不可用（版本不足或扩展导入失败）"
+    with _WGC_CAPTURE_LOCK:
+        session = _get_or_create_session(int(hwnd), force=True)
+    if session is None:
+        return False, wgc_failure_reason() or "会话创建失败（原因未记录）"
+    return True, ""
 
 
 def capture_window_wgc(

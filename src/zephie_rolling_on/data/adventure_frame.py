@@ -162,6 +162,7 @@ def resolve_regions(
     for popup_key in (
         "confirm_button",
         "execute_task_button",
+        "platinum_hammer",
         "adventure_complete_banner",
         "roll_kind",
     ):
