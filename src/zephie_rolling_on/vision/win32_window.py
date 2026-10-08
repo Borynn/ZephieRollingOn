@@ -159,6 +159,10 @@ def pick_window_at_point(
         if hwnd in skip or is_our_tool_window(hwnd):
             return False
         _x, _y, w, h = _client_size_screen_pixels(hwnd)
+        # 尺寸阈值按 100% 空间比对，否则高缩放下物理像素更大、会放松标准
+        from zephie_rolling_on.vision.scale_norm import baseline_client_size
+
+        w, h = baseline_client_size(w, h)
         return is_valid_game_capture_size(w, h)
 
     valid = [h for h in candidates if ok(h)]

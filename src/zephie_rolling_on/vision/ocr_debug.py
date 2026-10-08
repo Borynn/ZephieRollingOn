@@ -115,6 +115,82 @@ def save_dice_ocr_debug(
     return paths
 
 
+def save_dim_check_debug(
+    frame: np.ndarray,
+    region: dict[str, Any],
+    *,
+    patch: np.ndarray | None = None,
+    verdict: str = "",
+) -> dict[str, Path]:
+    """一键测试：保存灰屏判定区的裁剪图 + 在整帧上标出它落在哪里的叠加图。
+
+    为什么要两张：
+
+    * 裁剪图（``dim_check_region.png``）看**像素本身**——判定区是否真的明亮平滑；
+    * 叠加图（``dim_check_overlay.png``）看**位置**——判据是 ``max``，区域偏出去
+      几百像素却仍在「看着正常」的画面里，只看裁剪图发现不了。
+
+    区域是**客户区绝对坐标**（调用方传入前已按锚点换算）。统计量就地算，不从
+    ``recognize`` 导入：``recognize`` 反向依赖本模块（它调 ``save_cell_ocr_debug``），
+    在这里导入会形成环。
+    """
+    paths: dict[str, Path] = {}
+    if frame is None or frame.size == 0:
+        return paths
+
+    left = int(region.get("left", 0))
+    top = int(region.get("top", 0))
+    width = int(region.get("width", 0))
+    height = int(region.get("height", 0))
+    if width <= 0 or height <= 0:
+        return paths
+
+    ensure_debug_dir(DEBUG_DIR)
+    fh, fw = frame.shape[:2]
+    x2 = min(left + width, fw)
+    y2 = min(top + height, fh)
+
+    if patch is None:
+        patch = crop_region(frame, region)
+    if patch is not None and patch.size > 0:
+        region_path = DEBUG_DIR / "dim_check_region.png"
+        imwrite_unicode(str(region_path), patch)
+        paths["region"] = region_path
+
+        if patch.ndim == 3:
+            luma = np.max(patch[:, :, :3], axis=2).astype(np.float64)
+        else:
+            luma = patch.astype(np.float64)
+        max_luma = float(luma.max())
+        p25 = float(np.percentile(luma, 25))
+    else:
+        max_luma = p25 = float("nan")
+
+    import cv2
+
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (left, top), (x2, y2), (0, 140, 255), 2)
+    label = (
+        f"dim ROI {left},{top} {width}x{height} "
+        f"max={max_luma:.0f} P25={p25:.0f}"
+        + (f" {verdict}" if verdict else "")
+    )
+    cv2.putText(
+        overlay,
+        label,
+        (left, max(top - 8, 0)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (0, 140, 255),
+        1,
+        cv2.LINE_AA,
+    )
+    overlay_path = DEBUG_DIR / "dim_check_overlay.png"
+    imwrite_unicode(str(overlay_path), overlay)
+    paths["overlay"] = overlay_path
+    return paths
+
+
 def format_patch_stats(patch: np.ndarray) -> str:
     if patch is None or patch.size == 0:
         return "裁剪图为空"

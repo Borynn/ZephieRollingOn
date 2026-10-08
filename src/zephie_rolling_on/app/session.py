@@ -33,7 +33,6 @@ from zephie_rolling_on.app.model_decide import suggest_action_via_model
 from zephie_rolling_on.vision.capture import (
     capture_screen,
     capture_window_client,
-    crop_region,
 )
 from zephie_rolling_on.vision.adventure_complete_banner import find_adventure_complete_banner
 from zephie_rolling_on.vision.confirm_button import find_confirm_button
@@ -42,7 +41,7 @@ from zephie_rolling_on.vision.lucky_match import slot_center_in_client
 from zephie_rolling_on.vision.recognize import (
     RecognitionResult,
     format_recognition_timing,
-    is_cell_display_active,
+    is_screen_display_active,
     load_regions,
     recognize_cell_and_dice,
     recognize_cell_id_on_frame,
@@ -249,15 +248,9 @@ class ScriptSession:
         self.on_log(f"[耗时·{tag}] {' '.join(parts)}")
 
     def _is_dim(self, frame) -> bool:
-        cell_region = self.regions.get("cell_id_region", {})
-        cell_patch = (
-            crop_region(frame, cell_region) if cell_region.get("width") else None
-        )
-        return (
-            cell_patch is None
-            or cell_patch.size == 0
-            or not is_cell_display_active(cell_patch, self.regions)
-        )
+        # 灰屏判定区域是 dim_check_region（相对大冒险框偏移），**不是格子区域**：
+        # 格子区域随数字位数/笔画粗细变化太大，曾被误判为灰屏。见 is_screen_display_active。
+        return not is_screen_display_active(frame, self.regions)
 
     def _auto_click_step(self) -> bool:
         """单步：变灰→确认/执行任务；正常→格子变化后规划投骰/用卡。

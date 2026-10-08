@@ -1,12 +1,19 @@
 """系统显示缩放检测。
 
-为什么必须拦：识图依赖「逻辑坐标 == 物理像素」这一前提。进程是 DPI-unaware，
-系统缩放一旦不是 100%，Windows 会把客户区坐标和 GetSystemMetrics 虚拟化，
-桌面裁切就会按错误的位置 BitBlt，模板匹配随之整体偏移，识别必然失败。
-所以启动时先检测，缩放不为 100% 就阻断启动并让用户改回。
+标定基准：``config/regions.yaml``、``config/click_targets.yaml`` 与 ``assets/`` 下的
+模板全部按 **100% 缩放下的物理像素**制作。系统缩放大于 100% 时，游戏客户区在物理
+像素上被整体放大，模板尺寸与区域偏移就全部对不上——实测 150% 起模板匹配直接失配
+（best≈0.45 < 阈值 0.72），125% 也只是勉强命中。
 
-多显示器提示：这里取的是**系统（主显示器）**缩放；若游戏放在缩放不同的
-副屏上，同样会失效。
+所以分两种情况：
+
+* **>= 100%**：放行。截图后由 ``vision.scale_norm`` 在内存里压回 100% 尺寸，后续
+  识别流程（模板、区域、OCR）一律不必改。
+* **< 100%**：仍然拦下并提示。归一化这时只能**放大**画面，而放大是插值伪造像素、
+  模板匹配会明显退化，不如请用户把缩放调回 100%。
+
+多显示器提示：这里取的是**系统（主显示器）**缩放；若游戏放在缩放不同的副屏上，
+同样会失效。
 """
 
 from __future__ import annotations
@@ -14,7 +21,7 @@ from __future__ import annotations
 import ctypes
 import sys
 
-# 识图标定基准。缩放不等于它就无法工作。
+# 识图标定基准。缩放**低于**它不可用；等于或高于它都放行（高于时由画面归一化处理）。
 SUPPORTED_SCALE_PERCENT = 100
 _BASE_DPI = 96
 
@@ -156,5 +163,10 @@ def system_scale_percent() -> int:
 
 
 def is_scale_supported() -> bool:
-    """缩放是否为识图可用的 100%。"""
-    return system_scale_percent() == SUPPORTED_SCALE_PERCENT
+    """缩放是否可用。
+
+    只有**低于** 100% 才不可用：画面比标定基准还小，归一化只能放大，而放大是插值
+    伪造像素、模板匹配会明显退化。100% 及以上放行——高缩放由 ``vision.scale_norm``
+    在截图后压回 100% 空间处理。
+    """
+    return system_scale_percent() >= SUPPORTED_SCALE_PERCENT

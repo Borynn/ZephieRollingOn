@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import tkinter as tk
 import tkinter.font as tkfont
+from collections.abc import Callable
 
 from PIL import Image, ImageTk
 
@@ -151,8 +152,9 @@ def _center(dialog: tk.Toplevel, master: tk.Misc | None = None) -> None:
 # 系统缩放门禁（启动时）
 # ---------------------------------------------------------------------------
 
-# 与 config/regions.yaml 的标定基准绑定：缩放不是 100% 就无法识图。
-SCALE_WARNING_TITLE = "Zephie发现你的系统缩放不是100%！"
+# 与 config/regions.yaml 的标定基准绑定：缩放低于 100% 时画面比基准还小，
+# 归一化只能靠插值放大、匹配会退化，所以在启动时拦下。
+SCALE_WARNING_TITLE = "Zephie发现你的系统缩放低于100%！"
 SCALE_WARNING_HINT = "快去系统设置里改好，不然Zephie没法帮你 ~"
 
 _SCALE_ART_PATH = project_root() / "assets" / "ui" / "scale_warning.png"
@@ -187,7 +189,7 @@ def _fit_scale_text(dialog: tk.Toplevel, art_width: int) -> tuple[int, int, int]
 
     返回 ``(主句字号, 附句字号, 兜底折行宽度)``。
 
-    本弹窗只在缩放不为 100% 时出现，此时像素空间已被系统虚拟化；小屏高缩放
+    本弹窗只在缩放**低于** 100% 时出现，此时像素空间已被系统虚拟化；小屏高缩放
     下固定字号会把 "100%" 从中间拆成两行，所以这里主动缩字号而不是折行。
 
     兜底折行宽度平时为 0（Tk 中即"不折行"）。只有当可用宽度窄到连最小字号都
@@ -369,15 +371,56 @@ def show_scale_notice(master: tk.Misc) -> None:
     master.wait_window(dialog)
 
 
+def refresh_scale_or_warn(
+    master: tk.Misc | None = None, *, on_log: Callable[[str], None] | None = None
+) -> bool:
+    """开始一次「实际识图 / 点击」流程前调用：刷新缩放，不可用则提示并返回 False。
+
+    为什么每次都要刷新：画面归一化（``vision.scale_norm``）与点击坐标还原都读的是
+    缓存值，而用户可能在软件运行期间改了系统缩放。不刷新就会按**旧倍率**计算——
+    归一化压错的尺寸、点击整体偏移，且没有任何报错。
+
+    缩放低于 100% 时与启动门禁一致地拦下：那种情况归一化只能靠插值**放大**画面，
+    模板匹配会明显退化，不如请用户改回。
+
+    ``on_log`` 用于在界面上留下原因；``master`` 供提示弹窗定位（可为 ``None``，
+    此时仍会记录日志，只是不弹窗）。
+    """
+    from zephie_rolling_on.ui.system_scale import (
+        is_scale_supported,
+        system_scale_percent,
+    )
+    from zephie_rolling_on.vision.scale_norm import set_frame_scale_percent
+
+    percent = system_scale_percent()
+    if not is_scale_supported():
+        if on_log is not None:
+            on_log(
+                f"[缩放] 检测到系统缩放 {percent}%（低于 100%），"
+                "请改回 100% 或更高后重试。"
+            )
+        if master is not None:
+            show_scale_notice(master)
+        return False
+    set_frame_scale_percent(percent)
+    return True
+
+
 def guard_system_scale() -> bool:
-    """启动门禁：缩放不是 100% 时弹窗，用户确认后关闭软件。
+    """启动门禁：缩放**低于** 100% 时弹窗，用户确认后关闭软件。
 
     返回 ``True`` 表示可以继续启动；``False`` 表示调用方应立即退出。
-    缩放正常时**不创建任何窗口**。
+    缩放可用时**不创建任何窗口**，并把本次缩放交给画面归一化使用。
     """
     from zephie_rolling_on.ui.system_scale import is_scale_supported
 
     if is_scale_supported():
+        # 记录本次运行的缩放：截图按它压回 100% 空间（vision.scale_norm），
+        # 点击按它把 100% 空间的坐标还原成真实客户区坐标。
+        from zephie_rolling_on.vision.scale_norm import set_frame_scale_percent
+        from zephie_rolling_on.ui.system_scale import system_scale_percent
+
+        set_frame_scale_percent(system_scale_percent())
         return True
 
     root = tk.Tk()

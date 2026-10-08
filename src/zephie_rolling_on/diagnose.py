@@ -574,6 +574,15 @@ def _show_window(text: str, report: Path | None) -> bool:
         root_win = tk.Tk()
         root_win.title("Zephie Rolling On — 环境自检")
         root_win.geometry("760x560")
+        # 自检窗口也属于本软件：独立任务栏实体 + 正式图标（与主界面同一套）
+        try:
+            from zephie_rolling_on.ui.win_taskbar import set_app_user_model_id
+            from zephie_rolling_on.ui.zehpie_theme import apply_zehpie_window_icon
+
+            set_app_user_model_id()
+            _icon = apply_zehpie_window_icon(root_win)
+        except Exception:
+            _icon = None
         frame = tk.Frame(root_win)
         frame.pack(fill="both", expand=True, padx=10, pady=(10, 0))
         box = scrolledtext.ScrolledText(

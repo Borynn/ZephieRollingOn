@@ -3,21 +3,32 @@
 # 当前格子显示区域（锚点 462,152 时客户区约 527,270）→ 宽 90 高 25
 # OCR 目标文案格式：「{数字}格」，例如 42格
 cell_id_region:
-  left: 87
-  top: 120
-  width: 43
-  height: 21
+  left: 93
+  top: 121
+  width: 37
+  height: 17
 
-# 格子变灰（过场/遮罩）时不 OCR、不触发格子变化与规划；正常时数字为亮白高对比
-# 仅框数字时暗背景占多数，用峰值亮度 + 亮白占比（不用 p95）
-# 亮白笔画阈值：灰屏压暗后数字峰值常 <200，正常亮白数字为 255
-cell_display_bright_luma: 200
-cell_display_min_max_luma: 200
-cell_display_min_bright_ratio: 0.01
-cell_display_strong_peak_luma: 235
-cell_display_min_bright_pixels: 8
-cell_display_min_contrast: 40
-cell_display_min_std: 18
+# 灰屏检测区域：左上角 (150,543) → 右下角 (185,563)，同样相对大冒险框左上角。
+# 单独取一块**稳定的明亮背景**判断整屏明暗
+dim_check_region:
+  left: 150
+  top: 395
+  width: 20
+  height: 25
+
+# 格子变灰（过场/遮罩）时不 OCR、不触发格子变化与规划
+#
+# 判定区域取 dim_check_region（见上）；判定顺序见 is_cell_display_active
+# ——**默认判否**：必须由下面两条「肯定线」证明画面是亮的，否则一律判「变灰」。
+#   1) 强峰线：>= strong_peak_luma 的像素数 >= min_strong_peak_bright_pixels
+#      -> 判「正常」。用于判定区被局部阴影压住、但有一大片足够亮的情况
+#         （此时均值可能不达标，靠这条救回）。
+#   2) 均值线：亮度均值 >= min_mean_luma -> 判「正常」。
+#         判定区是一块平坦纯色背景，均值比峰值稳定得多，是主力判据。
+#   3) 两条都不成立 -> 判「变灰」。
+cell_display_strong_peak_luma: 220
+cell_display_min_strong_peak_bright_pixels: 100
+cell_display_min_mean_luma: 200
 # ROI 已仅框数字、不含「格」；1.0 表示不再做内部二次裁剪
 cell_digit_width_frac: 1.0
 # 格子 OCR：亮字连通域分割 + 逐字识别（见 vision/cell_ocr.py）

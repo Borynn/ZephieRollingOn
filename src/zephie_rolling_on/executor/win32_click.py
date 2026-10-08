@@ -107,6 +107,37 @@ def client_to_screen(capture_hwnd: int, client_x: int, client_y: int) -> tuple[i
     return win32gui.ClientToScreen(int(capture_hwnd), (int(client_x), int(client_y)))
 
 
+# 三个入口（点击 / 拖拽 / 移光标）都把坐标换算成**物理**客户区坐标。
+#
+# 为什么是物理：所有识图相关的坐标都在「归一化 = 100% 标定空间」里——归一化把
+# 截图按 100/系统缩放 压回了基准尺寸，所以从画面量出的坐标、regions.yaml 与
+# click_targets.yaml 里的配置都是这个空间。而真正落到游戏窗口上的坐标必须放大回
+# 物理像素。
+#
+# 实测依据：本项目的目标游戏（LaTale）是 ``DPI_AWARENESS_UNAWARE``，Windows 会给它
+# 一个虚拟化过的逻辑客户区（150% 时逻辑 1600x900 / 物理 2400x1350）。但游戏实际是
+# 按原生分辨率渲染的——把逻辑空间的坐标直接送进去，落点会按 逻辑/物理 的比例整体
+# 左移（实测偏差约 437 逻辑像素，与用户观察到的「偏左且偏差很大」吻合）。
+#
+# 因此这里**不区分投递方式**：postmessage / sendmessage 的 lParam 与
+# human / interception / screen 的屏幕坐标，都需要物理值。
+#
+# 注：这不是「Windows 会缩放 PostMessage 参数」（消息参数只是数字，系统不会碰），
+# 而是目标窗口自己按哪套坐标系解释。
+def _to_physical_space(client_x: int, client_y: int) -> tuple[int, int]:
+    """把 100% 标定空间（归一化后）的客户区坐标换算成**物理**客户区坐标。"""
+    from zephie_rolling_on.vision.scale_norm import (
+        BASELINE_SCALE_PERCENT,
+        frame_scale_percent,
+    )
+
+    scale = int(frame_scale_percent())
+    if scale <= BASELINE_SCALE_PERCENT:
+        return int(client_x), int(client_y)
+    factor = scale / float(BASELINE_SCALE_PERCENT)
+    return int(round(int(client_x) * factor)), int(round(int(client_y) * factor))
+
+
 def _screen_to_absolute(sx: int, sy: int) -> tuple[int, int]:
     user32 = ctypes.windll.user32
     left = int(user32.GetSystemMetrics(SM_XVIRTUALSCREEN))
@@ -439,7 +470,12 @@ def move_client_cursor(
     on_log: Callable[[str], None] | None = None,
     use_guard: bool = True,
 ) -> bool:
-    """仅 PostMessage WM_MOUSEMOVE：移动游戏内指针，不移动真实光标。"""
+    """仅 PostMessage WM_MOUSEMOVE：移动游戏内指针，不移动真实光标。
+
+    与点击同理：lParam 由**目标窗口**按自己的坐标系解释，实测需要物理值，因此
+    这里同样换算（见 ``_to_physical_space``）。
+    """
+    client_x, client_y = _to_physical_space(client_x, client_y)
     if use_guard:
         with click_shield_guard():
             return _move_client_cursor_impl(
@@ -489,6 +525,8 @@ def click_client_game(
     on_log: Callable[[str], None] | None = None,
 ) -> bool:
     """在已绑定游戏 capture hwnd 的客户区点击一次。"""
+    # 入参是 100% 标定空间（归一化后）的坐标，落点前换算成物理值。
+    client_x, client_y = _to_physical_space(client_x, client_y)
     with click_shield_guard():
         return _click_client_game_impl(
             capture_hwnd,
@@ -518,9 +556,8 @@ def _click_client_game_impl(
         log("[点击] 游戏窗口无效，请先绑定")
         return False
 
-    sx, sy = client_to_screen(capture_hwnd, client_x, client_y)
-
     if mode == "human":
+        sx, sy = client_to_screen(capture_hwnd, client_x, client_y)
         try:
             _mouse_click_screen(sx, sy)
         except Exception as exc:
@@ -533,6 +570,7 @@ def _click_client_game_impl(
         return True
 
     if mode == "interception":
+        sx, sy = client_to_screen(capture_hwnd, client_x, client_y)
         from zephie_rolling_on.executor.interception_click import click_screen_interception
 
         ok, err = click_screen_interception(sx, sy, on_log=log)
@@ -546,6 +584,7 @@ def _click_client_game_impl(
         return True
 
     if mode == "screen":
+        sx, sy = client_to_screen(capture_hwnd, client_x, client_y)
         import pyautogui  # noqa: PLC0415
 
         pyautogui.click(sx, sy)
@@ -585,6 +624,8 @@ def drag_client_game(
     on_log: Callable[[str], None] | None = None,
 ) -> bool:
     """客户区拖拽：按下 → 插值移动 → 抬起（用于卡池列表滚动）。"""
+    x0, y0 = _to_physical_space(x0, y0)
+    x1, y1 = _to_physical_space(x1, y1)
     with click_shield_guard():
         return _drag_client_game_impl(
             capture_hwnd,

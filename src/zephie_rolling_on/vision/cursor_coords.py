@@ -49,8 +49,16 @@ def get_cursor_client_pos(hwnd: int) -> ClientCursor | None:
         return None
 
     _x0, _y0, width, height = _client_size_screen_pixels(hwnd)
+    # 边界判断用物理值（与 ScreenToClient 同一空间）
     if not (0 <= cx < width and 0 <= cy < height):
         return None
+
+    # 对外一律用 100% 标定空间的坐标：region / 锚点 / click_targets / 模板命中都是
+    # 归一化空间的，而 ScreenToClient 给的是**物理**值（本进程 DPI 感知、
+    # 游戏 DPI-unaware）。不换算就会显示成比实际大 scale 倍的数字。
+    from zephie_rolling_on.vision.scale_norm import baseline_point
+
+    cx, cy = baseline_point(int(cx), int(cy))
 
     frame_x, frame_y = client_to_adventure_frame_pos(int(cx), int(cy))
     return ClientCursor(

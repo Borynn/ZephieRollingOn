@@ -46,6 +46,7 @@ DEFAULT_ENGINE_MODULE = "vela_official"
 ENGINE_LABELS: dict[str, str] = {
     "vela_official": "VELA v4",
     "vela_official_v41": "VELA v4.1",
+    "vela_official_v42": "VELA v4.2",
 }
 
 # Payload sanity range for the UI gate.

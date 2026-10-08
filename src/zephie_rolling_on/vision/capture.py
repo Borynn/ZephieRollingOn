@@ -190,8 +190,28 @@ def wgc_supported() -> bool:
     return _wgc_state
 
 
+def _normalize_to_baseline(frame):
+    """把截图归一化回 100% 标定空间。
+
+    缩放为 100（或未设置）时原样返回，因此不引入任何额外开销与像素变化。
+    见 ``vision.scale_norm``：模板与区域配置都按 100% 标定，非 100% 的画面会被
+    整体放大而全部对不上，所以在**唯一出口**这里压回去，后续识别流程不必改。
+    """
+    from zephie_rolling_on.vision.scale_norm import (
+        frame_scale_percent,
+        normalize_frame_scale,
+    )
+
+    return normalize_frame_scale(frame, frame_scale_percent())
+
+
 def capture_screen(monitor_index: int = 1) -> np.ndarray:
-    """截取主显示器，返回 BGR numpy 数组（OpenCV 格式）。"""
+    """截取主显示器，返回 BGR numpy 数组（OpenCV 格式）；**已归一化回 100% 标定空间**。"""
+    return _normalize_to_baseline(_capture_screen_raw(monitor_index))
+
+
+def _capture_screen_raw(monitor_index: int = 1) -> np.ndarray:
+    """``capture_screen`` 的原实现；返回值**未经归一化**。"""
     import cv2
     import mss
 
@@ -538,11 +558,24 @@ def _occlusion_note_with_detail(hwnd: int, *, wgc_ok: bool = False) -> str:
 
 
 def capture_window_client(hwnd: int) -> Optional[np.ndarray]:
-    """截取游戏窗口客户区（BGR）。
+    """截取游戏窗口客户区（BGR），**返回前统一归一化回 100% 标定空间**。
 
     WGC 可用时优先用它；否则退回桌面裁切。窗口被遮挡时桌面裁切会截到上层
     窗口，因此先判定遮挡并直接返回 ``None``（``capture_block_reason()`` 会是
     ``"occluded"``），由调用方提示用户。
+
+    为什么拆成「外层归一化 + 内层原实现」：本函数有**多条**返回路径（WGC /
+    桌面裁切 / 各自的失败分支），逐条包 ``_normalize_to_baseline`` 会漏——实测就
+    漏掉过 ``return wgc_img``，而 WGC 恰是主路径，导致整轮缩放适配在主路径上
+    失效。放在唯一出口，则由**结构**保证不可能漏。
+    """
+    return _normalize_to_baseline(_capture_window_client_raw(hwnd))
+
+
+def _capture_window_client_raw(hwnd: int) -> Optional[np.ndarray]:
+    """``capture_window_client`` 的原实现；返回值**未经归一化**。
+
+    内部所有 ``return`` 保持原样，不再逐条包装。
     """
     if sys.platform != "win32":
         return None

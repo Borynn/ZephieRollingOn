@@ -56,6 +56,12 @@ from zephie_rolling_on.ui.zehpie_theme import (
     make_ui,
 )
 from zephie_rolling_on.ui.window_picker import DraggableWindowPicker
+from zephie_rolling_on.ui.win_taskbar import set_app_user_model_id
+from zephie_rolling_on.ui.screen_awake import (
+    allow_screen_sleep,
+    is_screen_awake,
+    keep_screen_awake,
+)
 from zephie_rolling_on.vision.cursor_coords import get_cursor_client_pos
 from zephie_rolling_on.vision.ocr_preload import (
     preload_recognition_engines,
@@ -198,7 +204,8 @@ class ControlPanel:
         apply_saved_geometry(self.root, "main", default="400x860")
         self.root.minsize(360, 720)
         self.root.configure(bg=_UI["bg"])
-        # 启动即设图标；须保持 PhotoImage 引用，否则 GC 后变回羽毛笔
+        # 启动即设图标；主路径直接写窗口句柄，不需要持有 PhotoImage（返回 None
+        # 表示主路径成功；退回 iconphoto 时才有 PhotoImage，那时必须保存引用）
         self._window_icon = apply_zehpie_window_icon(self.root)
         self._geo_save_after: str | None = None
         self.root.bind("<Configure>", self._on_main_configure, add="+")
@@ -900,7 +907,11 @@ class ControlPanel:
         log_success: bool = True,
         persist_disk: bool = False,
     ) -> None:
-        if not is_valid_game_capture_size(info.client_width, info.client_height):
+        # 尺寸阈值按 100% 空间比对（与 pick_window_at_point 一致）；日志仍报物理尺寸
+        from zephie_rolling_on.vision.scale_norm import baseline_client_size
+
+        _bw, _bh = baseline_client_size(info.client_width, info.client_height)
+        if not is_valid_game_capture_size(_bw, _bh):
             self._append_log(
                 f"拒绝绑定：客户区仅 {info.client_width}×{info.client_height}，"
                 f"过小。请把鼠标放在游戏画面内再按 {self._hotkey.bind_window_label()}。"
@@ -1131,6 +1142,16 @@ class ControlPanel:
         self._exporting_logs = False
         self._sync_recognition_test_buttons()
 
+    def _refresh_scale_or_block(self, tag: str) -> bool:
+        """开始一次实际识图/点击前刷新系统缩放；不可用则记日志、弹窗并返回 False。
+
+        缩放可能在软件运行期间被改动（改完系统设置再回来操作），而画面归一化与
+        点击坐标还原读的都是缓存值——不刷新就会按旧倍率计算，点击整体偏移且不报错。
+        """
+        from zephie_rolling_on.ui.notice_dialog import refresh_scale_or_warn
+
+        return refresh_scale_or_warn(self.root, on_log=self._append_log)
+
     def _test_all_recognition(self) -> None:
         """整条识别流程：标定 → 卡池 → 骰子/格子/幸运卡。
 
@@ -1139,6 +1160,8 @@ class ControlPanel:
         """
         if self._recognition_test_busy:
             self._append_log("识别测试进行中，请稍候…")
+            return
+        if not self._refresh_scale_or_block("一键测试"):
             return
         hwnd = self._resolved_hwnd()
         if not hwnd:
@@ -1172,6 +1195,25 @@ class ControlPanel:
 
         threading.Thread(target=work, name="recognition-test-all", daemon=True).start()
 
+    def _save_test_step_frame(
+        self, save_debug: bool, name: str, frame, log: "Callable[[str], None]"
+    ) -> None:
+        """一键测试：把某一步**将要使用的画面**先存下来，再执行该步测试。
+
+        为什么要「先存再测」：原先每步失败就 ``return``，图片是在步骤**成功之后**
+        才写的，所以最容易失败的场景反而一张图都没有（用户开了开关却找不到文件）。
+        先存一份，任何一步失败都能看到它当时看到的是什么。
+        """
+        if not save_debug:
+            return
+        from zephie_rolling_on.vision.debug_paths import save_debug_frame
+
+        path = save_debug_frame(frame, f"{name}.png")
+        if path is not None:
+            log(f"[调试图] {path.name}")
+        else:
+            log(f"[调试图] {name}.png 保存失败（画面为空或写入出错）")
+
     def _recognition_test_body(
         self,
         hwnd: int,
@@ -1181,11 +1223,27 @@ class ControlPanel:
     ) -> None:
         """在工作线程内执行；失败原因通过 ``_finish_recognition_test_error`` 上报。"""
         # ---- 1) 分辨率检查 + 标定（1366×768 时跳过开关检测，其余分辨率照常）----
+        self._save_test_step_frame(
+            save_debug, "step1_calib_in", capture_window_client(int(hwnd)), log
+        )
         boot = run_adventure_bootstrap(
             int(hwnd), on_log=None, skip_toggle_when_blocked=True
         )
         if boot.resolution_notice:
             log(f"[跳过动画] {boot.resolution_notice}")
+        # 把标定得到的两个关键坐标显式打出来（都是 100% 标定空间的客户区坐标，
+        # 与 regions.yaml / click_targets.yaml 同一坐标系）。此前这两处只能从
+        # *_msg 字符串里间接看到，排查「点击落点不对」时不够直接。
+        if boot.toggle_center is not None:
+            log(
+                f"[{tag}] 大冒险开关按钮：客户区 "
+                f"({boot.toggle_center[0]}, {boot.toggle_center[1]})"
+            )
+        if boot.anchor is not None:
+            log(
+                f"[{tag}] 大冒险界面左上角：客户区 "
+                f"({boot.anchor[0]}, {boot.anchor[1]})"
+            )
 
         if not boot.ok:
             lines = [
@@ -1218,6 +1276,11 @@ class ControlPanel:
             log(f"[{tag}] 继续执行后续检测…")
 
         # ---- 2) 卡池 ----
+        # 先存「动作前」的画面：卡池要先点击打开面板才截得到内容，若点击/坐标有问题
+        # 就会在截屏之前失败，那时只有这张前置图能说明当时屏幕是什么样。
+        self._save_test_step_frame(
+            save_debug, "step2_deck_pool_before", capture_window_client(int(hwnd)), log
+        )
         regions = load_regions()
         pool_lines: list[str] = []
         pool_result = scan_and_apply_deck_pool(
@@ -1238,6 +1301,7 @@ class ControlPanel:
 
         # ---- 3) 截屏 + 识别 ----
         frame = capture_window_client(hwnd)
+        self._save_test_step_frame(save_debug, "step3_capture", frame, log)
         if frame is None:
             from zephie_rolling_on.vision.capture import (
                 capture_block_reason,
@@ -1273,8 +1337,26 @@ class ControlPanel:
         inv_rec = recognize_inventory_dice(frame, regions)
         charge_rec = recognize_charge_dice(frame, regions)
         if save_debug:
+            # 第 4 步与第 3 步用的是**同一帧**（step3_capture.png），不重复存一份大图；
+            # 这里补的是各识别区域的裁剪与叠加（骰子/格子/卡牌），定位偏差看这些更直接。
+            log("[调试图] 识别阶段输入同 step3_capture.png")
             save_inventory_dice_debug(frame, regions, inv_rec)
             save_charge_dice_debug(frame, regions, charge_rec)
+            # 灰屏判定区：裁剪图看像素、叠加图标位置。判据是 max，区域偏出去几百像素
+            # 时画面仍「看着正常」，只看裁剪图发现不了，所以两张都要。
+            from zephie_rolling_on.vision.ocr_debug import save_dim_check_debug
+            from zephie_rolling_on.vision.recognize import (
+                dim_check_region,
+                is_screen_display_active,
+            )
+
+            dim_verdict = (
+                "亮屏" if is_screen_display_active(frame, regions) else "灰屏"
+            )
+            for p in save_dim_check_debug(
+                frame, dim_check_region(regions), verdict=dim_verdict
+            ).values():
+                log(f"[调试图] {p.name}")
         dice_rec, cell_rec, lucky_rec = recognize_all_on_frame(
             frame,
             regions,
@@ -1845,6 +1927,11 @@ class ControlPanel:
         # 停止中/启动准备中需要刷新按钮文案；其余由 start/stop 等显式 sync
         if self._session.is_stopping() or self._auto_start_preparing:
             self._sync_auto_click_buttons()
+        # 兜底：脚本已停但常亮仍在（某条停止路径漏了释放），这里补一次。正常路径
+        # 已在 _auto_click_stop / _on_auto_stopped_ui 释放，届时 is_screen_awake()
+        # 为 False，本句不产生任何 Win32 调用。
+        if is_screen_awake() and not self._session.is_running():
+            self._release_screen_awake()
         self.root.after(200, self._poll_log_queue)
 
     @staticmethod
@@ -1915,6 +2002,9 @@ class ControlPanel:
 
     def _on_auto_stopped_ui(self, _retry: int = 0) -> None:
         self._disable_mouse_shield()
+        # 循环内自行停止（轮数到、零骰、遮挡、标定失败…）走的是这条路径，不是
+        # _auto_click_stop，所以必须在这里也释放常亮。
+        self._release_screen_awake()
         self._sync_auto_click_buttons()
         if self._session.take_stop_reason_kind() == "occluded":
             self._show_occlusion_notice("自动点击已停止")
@@ -2011,6 +2101,11 @@ class ControlPanel:
             return
         if self._session.is_running():
             self._append_log("自动点击已在运行。")
+            return
+        # 系统缩放可能在软件运行期间被改动（改完设置再回来点「启动」）。画面归一化
+        # 与点击坐标还原都依赖这个缓存，不重取就会按旧倍率计算、点击整体偏移，
+        # 所以每次启动都重新读一次；低于 100% 时与启动门禁一致地拦下。
+        if not self._refresh_scale_or_block("启动"):
             return
         hwnd = self._resolved_hwnd()
         if not hwnd:
@@ -2209,6 +2304,11 @@ class ControlPanel:
             self._sync_auto_click_buttons()
             return
 
+        # 脚本跑起来后强制屏幕常亮：屏幕一关，截屏就是黑屏，识别会把它当成「变灰」
+        # 而整晚空跑。必须在 UI 线程申请（SetThreadExecutionState 按线程记录），本函数
+        # 由 root.after 回调到 UI 线程，正好满足；释放见 _release_screen_awake。
+        keep_screen_awake()
+
         self._session.start(
             hwnd,
             auto_click=True,
@@ -2236,9 +2336,18 @@ class ControlPanel:
                 self._append_log(f"  …（省略前面 {len(lines) - 30} 行）")
         self._sync_auto_click_buttons()
 
+    def _release_screen_awake(self) -> None:
+        """恢复系统原有的屏幕关闭/休眠行为。
+
+        **每条停止路径都必须经过这里**（停止按钮/热键、循环内自行停止、关闭程序），
+        否则屏幕会一直亮到进程退出。重复调用无副作用。
+        """
+        allow_screen_sleep()
+
     def _auto_click_stop(self) -> None:
         self._disable_mouse_shield()
         self._session.stop()
+        self._release_screen_awake()
         self._update_current_cell(None)
         target = self._read_rounds_target()
         self._lbl_rounds_progress.config(text=f"0/{target}")
@@ -2259,6 +2368,9 @@ class ControlPanel:
     def _on_close(self) -> None:
         remember_window_geometry(self.root, "main")
         self._disable_mouse_shield()
+        # 关闭程序也要释放：进程退出虽会让申请失效，但显式恢复更稳妥，也覆盖
+        # 关闭后又被复用同一线程的极端情况。
+        self._release_screen_awake()
         if self._advice_loop_active:
             self._stop_advice_loop()
         if self._session.is_running():
@@ -2278,6 +2390,8 @@ class ControlPanel:
 
 
 def run_app() -> None:
+    # 任务栏独立实体：必须在建任何窗口之前设，否则已建窗口会带着旧 ID 进任务栏
+    set_app_user_model_id()
     # 识图依赖逻辑坐标 == 物理像素：系统缩放不是 100% 时先拦下并提示，
     # 用户点「确认」后直接关闭软件，不进入主界面。
     if not guard_system_scale():

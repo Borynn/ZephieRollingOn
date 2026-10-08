@@ -17,6 +17,7 @@ BASELINE_ANCHOR = (462, 152)
 
 _REGION_BOX_KEYS = (
     "cell_id_region",
+    "dim_check_region",
     "dice_usage_region",
     "lucky_cards_region",
     "inventory_dice_region_a",

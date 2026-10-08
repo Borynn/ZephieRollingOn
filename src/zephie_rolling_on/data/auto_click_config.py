@@ -377,6 +377,11 @@ def load_skip_animation_via_f12(path: Path | None = None) -> bool:
 # 只作用于本次运行，不写盘，也不改动用户勾选状态：分辨率变回其它值即自动恢复。
 BLOCKED_SKIP_ANIMATION_SIZE = (1366, 768)
 
+# 该判定允许的像素误差（长、宽各自）。
+# 归一化先按系统缩放重采样、再取整，结果很难刚好等于 1366×768；要求严格相等会让
+# 这条判定在真机上随机失效。
+BLOCKED_SKIP_ANIMATION_SIZE_TOLERANCE = 5
+
 _skip_animation_resolution_block = False
 
 

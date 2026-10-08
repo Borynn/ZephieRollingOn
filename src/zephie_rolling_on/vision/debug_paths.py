@@ -25,6 +25,27 @@ def debug_image_path(filename: str) -> Path:
     return DEBUG_DIR / filename
 
 
+def save_debug_frame(frame, filename: str) -> Path | None:
+    """把一帧存成调试图；失败返回 ``None``，**不抛异常**。
+
+    供「一键测试」每步**开始前**留证：以前某步失败就直接 return，一张图都写不出来
+    （表现为「开关开了却找不到图片」）。失败时最需要看的就是该步当时看到的画面。
+
+    注意：存下来的是**归一化之后**的画面（``capture_window_client`` 已在出口把
+    非 100% 缩放压回 100% 标定空间），所以尺寸与 ``regions.yaml`` 一致，可直接和
+    模板对照；若排查的是缩放问题本身，需要另行抓取原始物理像素。
+    """
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return None
+    from zephie_rolling_on.vision.image_io import imwrite_unicode
+
+    path = debug_image_path(filename)
+    try:
+        return path if imwrite_unicode(str(path), frame) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def new_debug_timestamp() -> str:
     return datetime.now(timezone.utc).astimezone().strftime("%Y%m%d_%H%M%S_%f")[:-3]
 

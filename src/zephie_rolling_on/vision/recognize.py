@@ -129,15 +129,15 @@ def _prepare_small_patch_for_ocr(patch: np.ndarray, *, min_width: int = 160, min
 
 
 def _cell_display_thresholds(config: dict[str, Any]) -> dict[str, float | int]:
-    bright_luma = int(config.get("cell_display_bright_luma", 200))
     return {
-        "bright_luma": bright_luma,
-        "min_ratio": float(config.get("cell_display_min_bright_ratio", 0.01)),
-        "min_max_luma": int(config.get("cell_display_min_max_luma", bright_luma)),
-        "strong_peak": int(config.get("cell_display_strong_peak_luma", 235)),
-        "min_bright_pixels": int(config.get("cell_display_min_bright_pixels", 8)),
-        "min_contrast": float(config.get("cell_display_min_contrast", 40)),
-        "min_std": float(config.get("cell_display_min_std", 18)),
+        # 两条**肯定线**，任一条成立即判「正常」。都不成立 -> 判「变灰」。
+        "strong_peak": int(config.get("cell_display_strong_peak_luma", 220)),
+        # 强峰像素数：以 **strong_peak** 为基准计数（挡住零星热像素误判）
+        "min_strong_peak_bright_pixels": int(
+            config.get("cell_display_min_strong_peak_bright_pixels", 100)
+        ),
+        # 亮度**均值**下限；判定区是一块平坦背景，均值比峰值更代表整体明暗
+        "min_mean_luma": float(config.get("cell_display_min_mean_luma", 200)),
     }
 
 
@@ -148,42 +148,130 @@ def is_cell_display_active(
     """
     格子 ROI 是否为「正常显示」状态（可 OCR、可触发规划）。
 
-    变灰过场时数字与背景一起被压暗（无亮白笔画）；正常时数字为亮白高对比。
-    灰屏压暗后峰值常落在 150～180，旧阈值 150 会误判为亮屏，故提高到 ~200，
-    并辅以对比度 / 亮度标准差，避免均匀灰雾或噪声碎块误触发。
+    判定顺序（**默认判否**：必须由肯定线证明「亮」，否则一律判灰）：
+
+    1. **强峰线**：``>= strong_peak`` 的像素达到 ``min_strong_peak_bright_pixels`` 个
+       —— 判「正常」。适合「判定区被局部阴影压住、但有一大片足够亮」的情况：
+       此时均值可能不达标，靠这条救回。
+    2. **均值线**：``mean >= min_mean_luma`` —— 判「正常」。判定区是一块平坦背景，
+       均值比峰值稳定得多，是主力判据。
+    3. 两条都不成立 → **判「变灰」**。
+
+    设计取舍的变更（2026-10 起）：早期是「默认判亮、只否决灰」，理由是「正常画面的
+    形态太多、枚举亮容易漏」。现在改成「必须证明亮」，因为 ``dim_check_region`` 换成
+    了一块**平坦纯色**区域（实测亮屏 max 252 / mean 249、灰屏 max 151 / mean 149），
+    亮的形态不再多样、正信号比负信号更可靠。
+
+    ⚠ 代价：判定区在**非冒险界面**下若读到其他画面（弹窗、菜单、别的面板），会被判成
+    灰屏，脚本于是走灰屏分支（找不到任何按钮时**什么都不做**）而静默停在那里。所以
+    这块区域必须取「冒险界面下始终为亮色」的位置。
+
+    已删除的旧判据（都因为「不能区分亮/灰」而被移除）：
+
+    * ``min_max_luma``（单条 max 下限）——被上面两条肯定线取代；它只做否决，
+      在「默认判否」下与强峰线无法共存（会互相矛盾）。
+    * ``min_contrast``（``max - P25``）——在**明亮且平滑**的判定区上必然失效：
+      亮屏时 max 255 / P25 183，contrast 仅 72，远低于任何合理阈值。
+    * ``min_bright_ratio``（亮白占比）与以 ``bright_luma`` 为基准的像素数——对 ROI
+      尺寸与数字笔画数极度敏感，会把峰值 251 的细笔画「1」误判成灰屏。
+    * ``min_std``（亮度标准差）——**实测亮/灰两组完全重叠**：同一 ROI 下灰屏
+      可以比亮屏更离散（灰屏 33.67 vs 亮屏 19.27），且找不到任何「只有 std 能拦」
+      的样本；它作为否决条件只会误杀亮屏。
     """
     if patch is None or patch.size == 0:
+        # 裁不出像素无从判断；判灰即「不识别」，与「默认判否」一致
         return False
     cfg = config or {}
     params = _cell_display_thresholds(cfg)
-    bright_luma = int(params["bright_luma"])
-    min_ratio = float(params["min_ratio"])
-    min_max_luma = int(params["min_max_luma"])
     strong_peak = int(params["strong_peak"])
-    min_bright_pixels = int(params["min_bright_pixels"])
-    min_contrast = float(params["min_contrast"])
-    min_std = float(params["min_std"])
+    min_strong_peak_bright_pixels = int(params["min_strong_peak_bright_pixels"])
+    min_mean_luma = float(params["min_mean_luma"])
+
     if patch.ndim == 3:
         luma = np.max(patch[:, :, :3], axis=2)
     else:
         luma = patch
-    max_luma = float(luma.max())
-    if max_luma < min_max_luma:
-        return False
-    if float(luma.std()) < min_std:
-        return False
-    contrast = max_luma - float(np.percentile(luma, 25))
-    if contrast < min_contrast:
-        return False
-    bright_mask = luma >= bright_luma
-    bright_count = int(bright_mask.sum())
-    bright_ratio = float(bright_count) / float(luma.size)
-    if max_luma >= min_max_luma and bright_ratio >= min_ratio:
+
+    # 1) 强峰线：峰值够高，且这样的像素够多
+    strong_peak_count = int((luma >= strong_peak).sum())
+    if strong_peak_count >= min_strong_peak_bright_pixels:
         return True
-    # 宽 ROI 仅 1～2 位亮白数字时占比可能略低于 min_ratio（如 54px 裁切「1」）
-    if max_luma >= strong_peak and bright_count >= min_bright_pixels:
+
+    # 2) 均值线
+    if float(luma.mean()) >= min_mean_luma:
         return True
+
+    # 3) 两条肯定线都不成立 -> 判否（灰）
     return False
+
+
+def dim_check_region(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    """灰屏判定所用的区域（``dim_check_region``）。
+
+    未配置时退回 ``cell_id_region``：这只是为了避免「缺配置 → 永远判灰」的静默
+    故障，不应作为正常路径依赖。
+    """
+    cfg = config or {}
+    region = cfg.get("dim_check_region")
+    if isinstance(region, dict) and region.get("width"):
+        return region
+    fallback = cfg.get("cell_id_region")
+    return fallback if isinstance(fallback, dict) else {}
+
+
+def format_display_stats(
+    patch: np.ndarray, config: dict[str, Any] | None = None
+) -> str:
+    """灰屏判定的可读参数：调阈值时直接读日志/JSON 即可，不必另外截图。
+
+    只报**判定实际用到的量**：两条肯定线各自的自变量与门槛（亮像素数 vs
+    ``min_strong_peak_bright_pixels``、均值 vs ``min_mean_luma``），以及最终判定。
+    ``max`` / ``P25`` 作为诊断参考保留——`max` 能看出峰值有没有被压掉，`P25` 是
+    contrast 时代的历史量，便于对照旧日志。
+    """
+    if patch is None or patch.size == 0:
+        return "裁剪图为空"
+    cfg = config or {}
+    params = _cell_display_thresholds(cfg)
+    h, w = patch.shape[:2]
+    if patch.ndim == 3:
+        luma = np.max(patch[:, :, :3], axis=2).astype(np.float64)
+    else:
+        luma = patch.astype(np.float64)
+    strong_peak = int(params["strong_peak"])
+    min_need = int(params["min_strong_peak_bright_pixels"])
+    min_mean = float(params["min_mean_luma"])
+    bright_n = int((luma >= strong_peak).sum())
+    mean_luma = float(luma.mean())
+    lit = is_cell_display_active(patch, cfg)
+    return (
+        f"尺寸 {w}×{h}，"
+        f"肯定线1 ≥{strong_peak} 像素数={bright_n}（需 ≥{min_need}）"
+        f"{'✓' if bright_n >= min_need else '✗'}，"
+        f"肯定线2 均值={mean_luma:.1f}（需 ≥{min_mean:.0f}）"
+        f"{'✓' if mean_luma >= min_mean else '✗'}，"
+        f"max={float(luma.max()):.0f}，P25={float(np.percentile(luma, 25)):.0f}，"
+        f"判定={'亮屏' if lit else '灰屏'}"
+    )
+
+
+def is_screen_display_active(frame: np.ndarray, config: dict[str, Any] | None = None) -> bool:
+    """整屏是否处于「正常显示」（可 OCR、可规划）。
+
+    判定区域取 ``dim_check_region``，**不再用格子区域**：格子区域只有「{数字}格」那
+    几十个像素，会随数字位数与笔画粗细剧烈变化 —— 细笔画的「1」亮像素极少，容易被
+    判成灰屏（实测同一块亮屏区域 max 只有 199~204）。``dim_check_region`` 是一块稳定
+    的明亮背景，明暗变化更能代表整屏。
+
+    区域缺失或裁不出像素时返回 False（判灰），与旧行为一致，保持保守。
+    """
+    region = dim_check_region(config)
+    if not region.get("width"):
+        return False
+    patch = crop_region(frame, region)
+    if patch is None or patch.size == 0:
+        return False
+    return is_cell_display_active(patch, config)
 
 
 def _dice_ocr_variants(patch: np.ndarray) -> list[np.ndarray]:
@@ -837,7 +925,11 @@ def recognize_frame(
         timing=timing,
     )
     if do_save_cell and patch is not None and patch.size > 0:
-        lit = is_cell_display_active(patch, config)
+        # 显示状态取自灰屏判定区（dim_check_region），**不是**这块格子区域，所以说明里
+        # 把两块区域的统计都打出来，便于对照「为什么判成这样」。
+        lit = is_screen_display_active(frame, config)
+        dim_region = dim_check_region(config)
+        dim_patch = crop_region(frame, dim_region) if dim_region.get("width") else None
         where = (
             "data/debug/cell_ocr_region.png"
             if debug_snapshot
@@ -846,9 +938,14 @@ def recognize_frame(
         lit_label = "正常" if lit else (
             "变灰（已保存调试图，跳过 OCR）" if debug_snapshot else "变灰跳过"
         )
+        dim_stats = (
+            f"灰屏判定区{format_display_stats(dim_patch, config)}"
+            if dim_patch is not None and dim_patch.size > 0
+            else "灰屏判定区（未配置或裁不出像素）"
+        )
         debug_note = (
             f"已保存格子 OCR 调试图至 {where}。{format_patch_stats(patch)}。"
-            f" 显示状态={lit_label}。"
+            f"{dim_stats}。 显示状态={lit_label}。"
         )
 
     lucky_count = 0
@@ -999,11 +1096,9 @@ def _recognize_cell_on_frame(
             "请在 config/regions.yaml 配置 cell_id_region（相对游戏客户区左上角）",
         )
     patch = crop_region(frame, region)
-    lit = (
-        patch is not None
-        and patch.size > 0
-        and is_cell_display_active(patch, config)
-    )
+    # 是否变灰由**整屏灰屏判定区**决定（见 is_screen_display_active），不是这块格子区域：
+    # 格子区域随数字位数与笔画粗细变化太大，细笔画会被误判成变灰而白白跳过 OCR。
+    lit = is_screen_display_active(frame, config)
 
     if save_debug and debug_snapshot and patch is not None and patch.size > 0 and not lit:
         save_cell_ocr_debug(
@@ -1012,14 +1107,14 @@ def _recognize_cell_on_frame(
                 "cell_id": None,
                 "raw_cell_text": "",
                 "display_lit": False,
-                "skipped_reason": "格子区域变暗（数字非亮白），跳过 OCR",
+                "skipped_reason": "画面变灰（整屏变暗），跳过 OCR",
             },
             snapshot=True,
         )
-        return None, "", "格子区域变暗（数字非亮白），已保存调试图"
+        return None, "", "画面变灰（整屏变暗），已保存调试图"
 
     if not lit:
-        return None, "", "格子区域变暗（数字非亮白），暂不识别"
+        return None, "", "画面变灰（整屏变暗），暂不识别"
     engine = _cell_id_engine_name(config)
     if engine != "fast" and _get_ocr_reader() is None:
         if save_debug and debug_snapshot:

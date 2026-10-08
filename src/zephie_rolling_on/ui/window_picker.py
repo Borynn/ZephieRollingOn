@@ -1,4 +1,25 @@
-"""拖到游戏窗口松手以绑定 hwnd（状态栏内嵌图标）。"""
+"""拖到游戏窗口松手以绑定 hwnd（状态栏内嵌图标）。
+
+**不要给拖影窗口加 ``grab_set()``** —— 这一条是硬约束，实测过：
+``grab_set()`` 是 **local grab**，按 Tk 的定义**只在指针位于本应用自己的窗口之上时**
+才重定向指针事件。用户把指针拖到**游戏窗口**（别的进程的窗口）上面时，Tk 判定
+"指针不在本应用的窗口上"，于是把事件**直接丢弃** —— 哪怕 Win32 捕获早已把消息送到
+我们线程里也没用。
+
+症状：慢拖正常（指针还在拖影矩形内，Tk 找得到窗口就照常派发），**快甩就丢**（指针
+跑到游戏窗口上，指针事件被 Tk 吃掉），表现为拖影停在半路、松手收不到、不绑定任何窗口。
+
+实测四种组合（按下在按钮上 → 之后才创建拖影 → 快甩到远处 → 松开）：
+
+* 不加 grab、也不加捕获 —— 正常（**Tk 在按下鼠标时自己已经做了 Win32 捕获**）
+* 仅 ``grab_set()``（旧代码）—— 甩动期间收到 0 次移动、松开收不到 = bug
+* 仅 ``SetCapture`` —— 正常
+* ``grab_set()`` + ``SetCapture`` —— **仍然 bug**
+
+所以根因是 grab，不是缺少捕获；而捕获本来就有。保持不加 grab，事件就靠**按钮**与
+**拖影**两处绑定的 ``<B1-Motion>`` / ``<ButtonRelease-1>`` 收（见 ``mount`` 与
+``_ensure_ghost``），两者都是本应用窗口，任何一处收到都能驱动拖影并走完绑定。
+"""
 
 from __future__ import annotations
 
@@ -63,12 +84,10 @@ class DraggableWindowPicker:
 
     def _on_press(self, event: tk.Event) -> None:
         self._dragging = True
+        # 这里**不能**调 self._ghost.grab_set()：local grab 只在指针位于本应用窗口
+        # 之上时才重定向事件，拖到游戏窗口上就会把指针事件丢掉，快甩即失效。
+        # 详见模块 docstring 的实测数据。
         self._ensure_ghost(event.x_root, event.y_root)
-        if self._ghost is not None:
-            try:
-                self._ghost.grab_set()
-            except tk.TclError:
-                pass
 
     def _on_motion(self, event: tk.Event) -> None:
         if not self._dragging:
@@ -83,10 +102,6 @@ class DraggableWindowPicker:
         x_root, y_root = int(event.x_root), int(event.y_root)
         ghost = self._ghost
         if ghost is not None:
-            try:
-                ghost.grab_release()
-            except tk.TclError:
-                pass
             try:
                 self._exclude.add(int(ghost.winfo_id()))
             except tk.TclError:

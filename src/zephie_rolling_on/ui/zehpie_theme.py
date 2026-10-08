@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from zephie_rolling_on.paths import project_root
+from zephie_rolling_on.ui.win_taskbar import apply_window_icon
 
+import sys
 import tkinter as tk
 import tkinter.font as tkfont
 from collections.abc import Callable
@@ -14,6 +16,8 @@ from PIL import Image, ImageDraw, ImageTk
 
 _PROJECT_ROOT = project_root()
 WINDOW_ICON_PATH = _PROJECT_ROOT / "assets" / "ui" / "zehpie_window_icon.png"
+# 任务栏图标必须用 .ico：见 apply_zehpie_window_icon 与 ui/win_taskbar.py
+WINDOW_ICON_ICO_PATH = _PROJECT_ROOT / "assets" / "ui" / "zehpie_window_icon.ico"
 
 COLORS = {
     "bg": "#FFF7FB",
@@ -837,16 +841,61 @@ def make_ui() -> dict:
 
 
 def apply_zehpie_window_icon(win: tk.Misc) -> ImageTk.PhotoImage | None:
-    """设置窗口图标；``iconphoto(True, …)`` 同时作为后续子窗默认图标。
+    """设置窗口图标（标题栏 + **任务栏**）。返回的 PhotoImage 必须保存引用。
 
-    返回的 PhotoImage 必须由调用方保存引用，否则会被 GC 掉变回羽毛笔。
+    主路径是 ``ui.win_taskbar.apply_window_icon``：按窗口所在显示器的 DPI
+    **分别** ``LoadImage`` 出 ``ICON_BIG`` / ``ICON_SMALL`` 的正确尺寸再分槽
+    写入。**不要**改回 Tk 的 ``wm iconbitmap``：只要 .ico 里能满足所需尺寸的帧
+    是 PNG 压缩的，它的小图标加载就会失败并回退成大图标（实测 32x32 → 标题栏
+    硬缩成 16x16，这就是图标发虚的原因）；而它又只请求 ``SM_CXICON`` /
+    ``SM_CXSMICON`` 两个尺寸，125%/150%/175% 缩放下仍要临时重采样。详见
+    ``ui/win_taskbar.py`` 的模块说明。
+
+    **必须挂 ``<Map>``**：Tk 在首次 map 时才创建真正的顶层 wrapper，map 之前
+    ``winfo_id()`` 的祖先 HWND 是另一个临时窗口，映射后即被替换 —— 映射前写进去
+    的图标会跟着旧 HWND 一起丢掉。
+
+    三层保障，顺序不能颠倒：
+
+    1. ``win.iconbitmap(.ico)`` —— 只是**预登记**给 Tk（Tk 把图存进 wmInfo，在
+       map 时应用），保证首次绘制就不是羽毛笔。它不作为尺寸来源。
+    2. ``apply_window_icon`` —— 真正把 ``ICON_BIG`` / ``ICON_SMALL`` 按窗口所在
+       显示器的 DPI 写成原生尺寸。
+    3. ``win.bind("<Map>", ...)`` —— 每次 map 后重写一次。**这一层必须存在**：
+       Tk 在首次 map 时才创建真正的顶层 wrapper，map 之前 ``winfo_id()`` 的祖先
+       HWND 是另一个临时窗口，映射后即被替换，映射前写进去的图标会跟着旧 HWND
+       一起丢掉。实测 map 处理器的执行顺序在 Tk 自己的图标应用之后，所以最终值
+       一定是第 2 步写的那个。
+
+    只有原生路径不可用时（非 Windows、.ico 缺失）才退回 Tk 的 ``iconphoto``：
+    它设的是**类**图标，至少能保证不是 Tk 自带的羽毛笔。
     """
-    if not WINDOW_ICON_PATH.is_file():
+    if sys.platform == "win32" and WINDOW_ICON_ICO_PATH.is_file():
+        try:
+            win.iconbitmap(str(WINDOW_ICON_ICO_PATH))
+        except Exception:
+            pass
+
+        def _apply(_event: object = None) -> None:
+            apply_window_icon(win, WINDOW_ICON_ICO_PATH)
+
+        _apply()  # 窗口已经映射时立刻生效
+        try:
+            win.bind("<Map>", _apply, add="+")
+        except Exception:
+            pass
         return None
+
+    photo: ImageTk.PhotoImage | None = None
     try:
-        im = Image.open(WINDOW_ICON_PATH).convert("RGB")
-        photo = ImageTk.PhotoImage(im, master=win)
-        win.iconphoto(True, photo)
-        return photo
+        if WINDOW_ICON_PATH.is_file():
+            im = Image.open(WINDOW_ICON_PATH).convert("RGBA")
+            # iconphoto 走的是不含 alpha 的路径，圆角外会变黑；先压到白底上
+            flat = Image.alpha_composite(
+                Image.new("RGBA", im.size, (255, 255, 255, 255)), im
+            ).convert("RGB")
+            photo = ImageTk.PhotoImage(flat, master=win)
+            win.iconphoto(True, photo)
     except Exception:
-        return None
+        photo = None
+    return photo

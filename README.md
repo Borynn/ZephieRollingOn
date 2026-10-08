@@ -62,6 +62,7 @@ python -m zephie_rolling_on.ui
 |---|---|---|---|
 | `vela_v4.vpk` | `VELAV4`，约 1 GB | window=24 | 上游 `vela-v4` 标签 |
 | `vela_v4.1.vpk` | COMPACT48，约 38 MB | horizon=48 | 上游 `main`（v4.1 标签里仍是 v4 引擎） |
+| `vela_v4.2.vpk` | COMPACT100 Hinge，约 87 MB | horizon=100 | 上游 `main`@`bc0e2fc6` |
 
 版权与许可归上游作者所有；如上游许可与本项目不同，以**上游许可**为准。
 
