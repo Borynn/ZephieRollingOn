@@ -22,6 +22,15 @@ _DEFAULT_PLUS_TEMPLATE = PROJECT_ROOT / "assets" / "ui" / "inventory_dice_plus.p
 # 区域B 深红底（BGR），与 UI 样本中位数接近
 _DEFAULT_PLUS_FILL_BGR = (55, 44, 150)
 _PLUS_MATCH_THRESHOLD = 0.55
+# 擦除规则：**按模板匹配中心，把 x <= cx + _PLUS_ERASE_RIGHT_PAD 的墨迹全部擦掉**，
+# 即从左边一路擦到加号右缘稍外一点。两个要点：
+#   1) 不能只擦「十字」——固定十字只够到加号右半（如加号本体 x9..15、中心 12.5 时，
+#      十字只覆盖 x11..14），左半截残墨会留在图上；整段擦除才清得干净。
+#   2) 上界取 +2 是**实测出来的最小值**：三个样本（+60 / +0 / +5）里加号右缘距匹配
+#      中心最远约 2.5px，+2 是仍能覆盖加号右缘、又不碰右侧第一位数字的取值。
+#      余量只有约 2~2.5px，所以它依赖「匹配中心≈加号真实中心」；若将来出现
+#      「擦到数字」的误判，应先修匹配中心的漂移，而不是继续缩小这个 +2。
+_PLUS_ERASE_RIGHT_PAD = 2
 _INVENTORY_MAX = 99999
 
 
@@ -92,45 +101,6 @@ def _estimate_bg_bgr(patch: np.ndarray) -> np.ndarray:
     return np.median(np.asarray(samples, dtype=np.float32), axis=0)
 
 
-def _plus_ink_mask(tmpl_bgr: np.ndarray) -> np.ndarray:
-    bg = _estimate_bg_bgr(tmpl_bgr)
-    dist = np.linalg.norm(tmpl_bgr.astype(np.float32) - bg, axis=2)
-    return dist > 22.0
-
-
-def _plus_arm_metrics(tmpl_bgr: np.ndarray) -> tuple[int, int, float, float]:
-    """Measure plus arm length / stroke thickness / ink centroid from template.
-
-    Template has ~6px horizontal and ~5px vertical arms (nearly equal).
-    Erase uses one shared arm length for both directions.
-    """
-    ink = _plus_ink_mask(tmpl_bgr)
-    ys, xs = np.where(ink)
-    if ys.size == 0:
-        return 5, 2, tmpl_bgr.shape[1] / 2.0, tmpl_bgr.shape[0] / 2.0
-    cy = float(ys.mean())
-    cx = float(xs.mean())
-    row = int(np.clip(round(cy), 0, ink.shape[0] - 1))
-    col = int(np.clip(round(cx), 0, ink.shape[1] - 1))
-    hz = np.flatnonzero(ink[row])
-    vt = np.flatnonzero(ink[:, col])
-    h_len = int(hz[-1] - hz[0] + 1) if hz.size else 5
-    v_len = int(vt[-1] - vt[0] + 1) if vt.size else 5
-    arm = max(h_len, v_len)
-    # Thickness: column width on vertical-stem rows (skip full horizontal bar row)
-    thick_vals: list[int] = []
-    for r in range(ink.shape[0]):
-        if r == row:
-            continue
-        cols = np.flatnonzero(ink[r])
-        if cols.size == 0:
-            continue
-        thick_vals.append(int(cols[-1] - cols[0] + 1))
-    thick = int(round(float(np.median(thick_vals)))) if thick_vals else 2
-    thick = max(1, min(thick, 3))
-    return arm, thick, cx, cy
-
-
 def erase_inventory_plus(
     patch: np.ndarray,
     *,
@@ -138,11 +108,23 @@ def erase_inventory_plus(
     fill_bgr: tuple[int, int, int] = _DEFAULT_PLUS_FILL_BGR,
     threshold: float = _PLUS_MATCH_THRESHOLD,
 ) -> tuple[np.ndarray, bool, float]:
-    """Template-match plus center, then erase an equal-arm cross (H len == V len).
+    """Template-match the plus, then erase every ink pixel with ``x <= cx + 2``.
 
-    Arm length prefers the vertical ink span at the matched center (same as
-    horizontal for a square plus, and does not reach into the digit on the right).
-    Only ink pixels on the cross are painted.
+    即「以匹配中心为界，从左边缘一路擦到加号右缘稍外」：
+
+        x <= matched_cx + _PLUS_ERASE_RIGHT_PAD
+
+    为什么不是只擦一个十字：固定十字只够到加号的右半（实测加号本体 x9..15、匹配
+    中心 12.5 时，十字只覆盖 x11..14），左半边残墨会留在图上；整段擦除才干净。
+
+    为什么上界是 +2：三个样本里加号右缘距匹配中心最远约 2.5 px，+2 是「仍能覆盖
+    加号右缘、且不碰右侧第一位数字」的实测最小值（余量约 2~2.5 px）。它依赖
+    「匹配中心 ≈ 加号真实中心」；早先那次误判（「+60」被擦成「30」→ 误报骰子
+    不足）就是臂长跟着墨迹跨度走、越过加号所致。若将来又出现擦到数字，应先修
+    匹配中心的漂移，而不是缩小这个 +2。
+
+    只涂该区域内**是墨迹的像素**（背景保持原样）；若区域内一个墨迹像素都没有
+    （加号颜色过浅），则整块区域照涂，保证它一定消失。
     """
     if patch is None or patch.size == 0:
         return patch, False, 0.0
@@ -156,7 +138,6 @@ def erase_inventory_plus(
     if th0 > sh or tw0 > sw:
         return patch.copy(), False, 0.0
 
-    arm0, thick0, _tcx, _tcy = _plus_arm_metrics(tmpl)
     search_w = min(sw, max(tw0 + 2, int(round(sw * 0.55))))
     search = patch[:, :search_w]
     search_gray = cv2.cvtColor(search, cv2.COLOR_BGR2GRAY)
@@ -164,7 +145,6 @@ def erase_inventory_plus(
 
     best_score = -1.0
     best_loc = (0, 0)
-    best_scale = 1.0
     best_size = (tw0, th0)
     for scale in (1.0, 0.9, 1.1, 0.85, 1.15, 0.8, 1.2):
         tw = max(4, int(round(tw0 * scale)))
@@ -181,7 +161,6 @@ def erase_inventory_plus(
         if float(mx) > best_score:
             best_score = float(mx)
             best_loc = (int(loc[0]), int(loc[1]))
-            best_scale = float(scale)
             best_size = (tw, th)
 
     out = patch.copy()
@@ -196,24 +175,14 @@ def erase_inventory_plus(
     dist = np.linalg.norm(patch.astype(np.float32) - bg, axis=2)
     ink = dist > 18.0
 
-    icx = int(np.clip(round(cx), 0, sw - 1))
-    vt = np.flatnonzero(ink[:, icx])
-    if vt.size:
-        arm = int(vt[-1] - vt[0] + 1)
-    else:
-        arm = max(3, int(round(arm0 * best_scale)))
-    thick = max(1, min(3, int(round(thick0 * best_scale))))
-    # +0.75：盖住横臂两端抗锯齿，仍远短于伸到右侧数字
-    half = arm / 2.0 + 0.75
-    half_t = thick / 2.0 + 0.25
-
     yy, xx = np.ogrid[:sh, :sw]
-    vertical = (np.abs(xx - cx) <= half_t) & (np.abs(yy - cy) <= half)
-    horizontal = (np.abs(yy - cy) <= half_t) & (np.abs(xx - cx) <= half)
-    cross = vertical | horizontal
-    erase = cross & ink
+    # 从左边缘擦到匹配中心右侧 _PLUS_ERASE_RIGHT_PAD 像素处（纵向不设限）。
+    # `& (yy >= 0)` 把形状从 (1, sw) 广播成 (sh, sw)：否则 fallback 分支拿
+    # (1, sw) 的掩码去索引 out（sh 行）会 IndexError。
+    zone = (xx <= (cx + _PLUS_ERASE_RIGHT_PAD)) & (yy >= 0)
+    erase = zone & ink
     if not np.any(erase):
-        erase = cross
+        erase = zone
     out[erase] = fill_bgr
     return out, True, best_score
 

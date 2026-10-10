@@ -5,7 +5,14 @@
   运行日志.txt     界面日志全文（带时间戳）
   自检报告.txt     导出时现场跑一遍环境自检
   环境信息.txt     版本、是否打包运行、Python 版本、程序目录、编码等
+  截图.png         自检时真实截到的那一帧（用户当时看到的画面）
+  截图-区域标注.png  同一帧，叠加 regions.yaml 各检测区域框与大冒险框
   配置/…           用户配置快照（排查需要）
+
+为什么要带那两张图：自检本来就会真的截一张图，但以前只留下文字结论。用户反馈
+「识别不对」时，日志里只有「识别失败/骰子不足」这类结论，看不到他当时的画面，
+也无法判断是标定偏了、区域框歪了、还是阈值不对——只能再让用户手工截图，来回
+好几轮。把已有的那一帧连同区域标注一起放进 zip，一轮就能定位。
 
 为什么打成 zip 而不是单个 txt：支持流程里最常见的问题不是导出失败，而是用户
 只发了日志、缺了我们需要的环境信息，来回追问要耗掉好几天。zip 让用户只需发
@@ -24,6 +31,7 @@ import platform
 import sys
 import zipfile
 from pathlib import Path
+from typing import Any
 
 from zephie_rolling_on.paths import project_root
 
@@ -41,6 +49,31 @@ LOG_NAME = "运行日志.txt"
 CHECK_NAME = "自检报告.txt"
 ENV_NAME = "环境信息.txt"
 CONFIG_DIR_NAME = "配置"
+# 自检时真实截到的那一帧，以及把 regions.yaml 各检测区域框画上去的同一帧。
+# 用户反馈「识别不对」时，这两张图才能说明「他当时看到的是什么、框有没有对」。
+SHOT_NAME = "截图.png"
+REGION_NAME = "截图-区域标注.png"
+
+# 标注图上要画出来的区域（键 -> 图上标签）。顺序即画图顺序。
+_OVERLAY_BOXES: tuple[tuple[str, str], ...] = (
+    ("cell_id_region", "cell"),
+    ("dim_check_region", "dim"),
+    ("dice_usage_region", "dice"),
+    ("inventory_dice_region_a", "invA"),
+    ("inventory_dice_region_b", "invB"),
+    ("charge_dice_region", "charge"),
+    ("lucky_cards_region", "lucky"),
+)
+# 这些是「弹窗模板搜索区」，坐标在 config[key]["search"] 下
+_OVERLAY_SEARCH_BOXES: tuple[tuple[str, str], ...] = (
+    ("confirm_button", "confirm"),
+    ("execute_task_button", "task"),
+    ("roll_kind", "roll"),
+)
+_OVERLAY_COLORS: tuple[tuple[int, int, int], ...] = (
+    (0, 215, 255), (0, 200, 80), (255, 120, 0), (0, 0, 255),
+    (255, 0, 255), (0, 255, 255), (200, 200, 0),
+)
 
 
 def _app_version() -> str:
@@ -109,6 +142,94 @@ def _read_text_tolerant(path: Path) -> str | None:
         return None
 
 
+def _encode_png(img: Any) -> bytes | None:
+    """BGR numpy -> PNG 字节；失败返回 None（不让附图上不上而坏掉整次导出）。"""
+    try:
+        import cv2
+
+        ok, buf = cv2.imencode(".png", img)
+        return buf.tobytes() if ok else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _draw_box(overlay: Any, box: Any, color: tuple[int, int, int], label: str) -> None:
+    """在 overlay 上画一个区域框 + 标签；坐标越界时裁到画面内。"""
+    import cv2
+
+    if not isinstance(box, dict):
+        return
+    left, top = int(box.get("left", 0)), int(box.get("top", 0))
+    width, height = int(box.get("width", 0)), int(box.get("height", 0))
+    if width <= 0 or height <= 0:
+        return
+    h, w = overlay.shape[:2]
+    x1, y1 = max(0, min(left, w - 1)), max(0, min(top, h - 1))
+    x2, y2 = max(0, min(left + width, w - 1)), max(0, min(top + height, h - 1))
+    if x2 <= x1 or y2 <= y1:
+        return
+    cv2.rectangle(overlay, (x1, y1), (x2, y2), color, 2)
+    # 标签放框上方；贴到顶边时改放框内侧，避免被裁掉
+    ty = y1 - 6 if y1 >= 14 else min(y1 + 16, h - 4)
+    cv2.putText(overlay, label, (x1, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+
+
+def _region_overlay(frame: Any) -> Any | None:
+    """把 regions.yaml 的各检测区域 + 大冒险框画到 frame 的副本上。"""
+    try:
+        import numpy as np
+
+        from zephie_rolling_on.data.adventure_frame import load_anchor
+        from zephie_rolling_on.vision.adventure_calib import FRAME_HEIGHT, FRAME_WIDTH
+        from zephie_rolling_on.vision.recognize import load_regions
+
+        regions = load_regions()  # 已按当前锚点换算成客户区坐标
+        overlay = np.array(frame, copy=True)
+
+        for i, (key, label) in enumerate(_OVERLAY_BOXES):
+            _draw_box(overlay, regions.get(key), _OVERLAY_COLORS[i % len(_OVERLAY_COLORS)], label)
+        for j, (key, label) in enumerate(_OVERLAY_SEARCH_BOXES, start=len(_OVERLAY_BOXES)):
+            entry = regions.get(key)
+            search = entry.get("search") if isinstance(entry, dict) else None
+            _draw_box(overlay, search, _OVERLAY_COLORS[j % len(_OVERLAY_COLORS)], label)
+
+        # 大冒险界面框：所有区域都相对它，画出来才能一眼看出整体偏没偏
+        ax, ay = load_anchor()
+        _draw_box(
+            overlay,
+            {"left": ax, "top": ay, "width": FRAME_WIDTH, "height": FRAME_HEIGHT},
+            (0, 255, 0),
+            f"anchor {ax},{ay}",
+        )
+        return overlay
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _capture_images() -> list[tuple[str, bytes]]:
+    """自检截到的那一帧 + 区域标注图，作为 zip 附件。
+
+    依赖 ``self_check_report()`` 已经跑过（是它触发的真实截屏）。取不到就返回空，
+    不影响其余材料的导出。
+    """
+    from zephie_rolling_on.diagnose import last_captured_frame
+
+    frame = last_captured_frame()
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return []
+
+    out: list[tuple[str, bytes]] = []
+    raw = _encode_png(frame)
+    if raw is not None:
+        out.append((SHOT_NAME, raw))
+    overlay = _region_overlay(frame)
+    if overlay is not None:
+        marked = _encode_png(overlay)
+        if marked is not None:
+            out.append((REGION_NAME, marked))
+    return out
+
+
 def _bundle_name() -> str:
     # 文件名用 ASCII：QQ/微信传文件时不会被转义搞乱，且带版本+时间便于辨认
     stamp = _datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -142,6 +263,9 @@ def export_bundle(log_text: str, *, dest_dir: Path | None = None) -> Path:
         (CHECK_NAME, check_text.encode("utf-8")),
         (ENV_NAME, environment_report().encode("utf-8")),
     ]
+
+    # 截图要放在自检**之后**取：自检那一步才是真正截屏的地方
+    payload.extend(_capture_images())
 
     config_dir = project_root() / "config"
     for name in CONFIG_SNAPSHOT_FILES:

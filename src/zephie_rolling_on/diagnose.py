@@ -20,10 +20,20 @@ import sys
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 OK = "OK"
 WARN = "WARN"
 FAIL = "FAIL"
+
+# 「实际截屏测试」真正截到的那一帧，仅内存持有；供「导出日志」随包附上。
+# 未绑定窗口或截屏失败时保持 None。取用方应自行 copy()，不要就地改写。
+_last_captured_frame: Any = None
+
+
+def last_captured_frame() -> Any:
+    """最近一次自检实际截到的画面（numpy BGR 数组）；没有则 None。"""
+    return _last_captured_frame
 
 # Windows 10 起始内部版本号；WGC（Windows.Graphics.Capture）自 1803 起提供。
 WIN10_RTM_BUILD = 10240
@@ -403,6 +413,10 @@ def check_capture() -> list[Check]:
         frame = capture_window_client(hwnd)
         if frame is not None and getattr(frame, "size", 0) > 0:
             h, w = frame.shape[:2]
+            # 留住这一帧：导出日志会把它连同区域标注一起打进 zip —— 用户反馈
+            # 「识别不对」时，光看日志只能看到结论，看不到他当时看到的画面。
+            global _last_captured_frame
+            _last_captured_frame = frame
             out.append(
                 Check(
                     OK,
