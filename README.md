@@ -10,7 +10,7 @@ Package: `zephie_rolling_on` · Dist: `zephie-rolling-on`
 
 **交流 QQ 群：`582530986`** — 使用问题、更新通知、反馈都在这儿。
 
-**许可：MIT。** 详见 [LICENSE](LICENSE)；第三方内容与免责说明见 [NOTICE](NOTICE)。
+**许可：CC BY-NC-SA 4.0。** 详见 [LICENSE](LICENSE)；第三方内容与免责说明见 [NOTICE](NOTICE)。
 
 需要注意两处例外：
 
