@@ -14,8 +14,7 @@ Package: `zephie_rolling_on` · Dist: `zephie-rolling-on`
 
 需要注意两处例外：
 
-- `decision_models/zephie_*.zm` 是本项目自研的**闭源模型包**，不在 MIT 范围内
-  （允许用来决策，不允许修改或提取权重）。
+- `decision_models/zephie_*.zm` 是本项目自研的**闭源模型包**（允许用来决策，不允许修改或提取权重）。
 - `native/vela/*.pyd` 与 `*.vpk` 是第三方开源内容，版权归上游作者，按其自身许可发布。
 
 ## 环境（开发）
