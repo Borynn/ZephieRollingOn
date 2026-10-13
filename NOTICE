@@ -7,45 +7,51 @@ Zephie Rolling On — NOTICE
 
 ## 1. 许可范围 / Scope
 
-本仓库以 **MIT 许可**发布，原文见 [`LICENSE`](LICENSE)。**但下列内容不在 MIT
-许可范围内**，适用各自条款：
+本项目以 **CC BY-NC-SA 4.0（署名—非商业性使用—相同方式共享 4.0 国际）**
+许可发布，原文见 [`LICENSE`](LICENSE)。VELA v4.1/v4.2 组件已获其作者书面许可，
+可随本项目按该许可分发；**但下列内容不在该许可范围内**，适用各自条款：
 
-**适用 MIT 许可**
+**适用 CC BY-NC-SA 4.0 许可**
 
 - `src/` 下的全部源代码
 - `scripts/` 下的全部脚本
-- `assets/` 下的本项目自绘素材（界面模板、图标等）
+- `assets/` 下由本项目自绘、且不属于游戏素材的图标与界面资源
 - `config/` 下的配置模板
 - `docs/`、`README.md` 等文档
 - `model_host.exe`：本项目的运行时组件（编译产物，源码不另行提供）
+- 当前便携包内置的 `decision_models/vela_v4.1.vpk` 及其所需的 v4.1 推理组件：
+  经上游作者书面许可，详见第 2 节；v4.2 在随项目分发时亦适用该授权
 
-**不适用 MIT 许可**
+**不适用 CC BY-NC-SA 4.0 许可**
 
 - `decision_models/*.zm` —— 闭源模型包，保留所有权利。见下文第 3 节。
-- `native/vela/*.pyd` 与 `decision_models/*.vpk` —— 第三方开源项目内容，
-  版权归上游作者所有，按其自身许可发布。见下文第 2 节。
 - 游戏相关的素材与数据（卡面图、界面模板、地图数据）—— 版权归游戏发行商所有，
   仅作识别用途随附。见下文第 4 节。
 
 第三方依赖（Python 包等）按各自许可发布，详见 `requirements.txt` / `pyproject.toml`。
 
-## 2. 第三方开源模型：VELA
+## 2. 第三方 VELA 模型与运行时
 
-`decision_models/*.vpk`（模型权重）与 `native/vela/*.pyd`（推理引擎）来自第三方
-开源项目，**不是本项目自研内容**：
+VELA v4.1/v4.2 的模型文件与运行所需的推理组件来自第三方项目，**不是本项目自研内容**。
+其版权归 `alfm201` 所有；`alfm201` 已书面允许本项目使用、修改、打包和再分发这些
+组件，并允许本项目按 CC BY-NC-SA 4.0 发布：
+
+<https://github.com/alfm201/adventure/issues/5#issuecomment-6138391205>
+
+该授权也允许商业或非商业使用，但不涵盖 `alfm201` 无权授权的第三方游戏图片或其他素材。
+本项目实际使用与分发的 VELA 组件如下：
 
 - 上游项目：**alfm201/adventure** — <https://github.com/alfm201/adventure>
-- 使用部分：`src/policies/vela`（价值表推理，depth=2）
+- 使用部分：`src/zephie_rolling_on/decision_models/vela_package.py`（价值表推理，depth=2）
 - 本仓库的改动：仅做**薄封装**——状态格式转换与返回值映射；推理逻辑与权重均取自
   上游，未作修改
-- 引擎源码位置：v4 见上游 `vela-v4` 标签；**v4.1 见上游 `main` 分支**
-  （`vela-v4.1` 标签里仍是 v4 引擎）
-- 版权与许可归上游作者所有。**如上游许可与本项目不同，以上游许可为准。**
+- 引擎来源：v4.1 见上游 `main` 分支（`vela-v4.1` 标签里仍是 v4 引擎）；
+  v4.2 见上游 `main` 的相应版本
 
 | 包 | 权重格式 | 体积 | 搜索窗口 |
 |---|---|---|---|
-| `vela_v4.vpk` | `VELAV4` | 约 1 GB | 24 |
 | `vela_v4.1.vpk` | COMPACT48 | 约 38 MB | 48 |
+| `vela_v4.2.vpk` | COMPACT100 Hinge | 约 87 MB | 100 |
 
 ## 3. 自研闭源模型包：`.zm`
 
@@ -86,4 +92,4 @@ Zephie Rolling On — NOTICE
 > 本作品使用了 Zephie Rolling On 的代码 / 组件。
 > <https://github.com/&lt;owner&gt;/ZephieRollingOn>
 
-（若使用了 VELA，请同时署名上游项目 alfm201/adventure。）
+（VELA 作者不要求署名；如使用了 VELA，仍建议注明上游项目 alfm201/adventure。）

@@ -10,7 +10,7 @@ dynamic = ["version"]
 description = "Zephie Rolling On — game assist UI, recognition, auto-click, decision DLL client"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT (see LICENSE)" }
+license = { text = "CC-BY-NC-SA-4.0 (see LICENSE)" }
 authors = [{ name = "Zephie Rolling On contributors" }]
 dependencies = [
   "openpyxl>=3.1.0",

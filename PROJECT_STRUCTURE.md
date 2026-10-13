@@ -1,7 +1,7 @@
 # ZephieRollingOn — directory map
 
 Package: `zephie_rolling_on` · Dist: `zephie-rolling-on`
-License: MIT（范围豁免见 `LICENSE` / `NOTICE`：闭源 `.zm` 与第三方内容不在 MIT 内）
+License: CC BY-NC-SA 4.0（范围豁免见 `LICENSE` / `NOTICE`：闭源 `.zm` 与第三方内容不在该许可内）
 
 | Path | Purpose |
 |------|---------|
@@ -53,7 +53,7 @@ License: MIT（范围豁免见 `LICENSE` / `NOTICE`：闭源 `.zm` 与第三方�
 | `scripts/check_lock.py` | Verify `requirements.lock` still satisfies every floor in `requirements.txt` |
 | `scripts/build_window_icon.py` | Regenerate `assets/ui/icon_master.png` (round-corner crop from a raw artwork) and the icon `.ico`/`.png` from it. Frames must stay DIB (except 256) so Windows/Tk can load exact sizes |
 | `scripts/check_undefined_names.py` | Scope-aware undefined-name check (AST). `py_compile` and import both miss these; in a Tk callback the `NameError` is silently dropped. Wired into `build_portable.ps1` and CI |
-| `LICENSE` | MIT（含范围豁免：闭源 `.zm` 与第三方内容不在 MIT 内） |
+| `LICENSE` | CC BY-NC-SA 4.0（含范围豁免：闭源 `.zm` 与第三方内容不在该许可内） |
 | `NOTICE` | 第三方署名、游戏素材版权声明、免责说明；随分发包一起发出 |
 | `.github/workflows/release.yml` | 推 `v*` 标签自动构建便携包并创建 Release |
 

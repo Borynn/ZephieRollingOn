@@ -12,10 +12,11 @@ Package: `zephie_rolling_on` · Dist: `zephie-rolling-on`
 
 **许可：CC BY-NC-SA 4.0。** 详见 [LICENSE](LICENSE)；第三方内容与免责说明见 [NOTICE](NOTICE)。
 
-需要注意两处例外：
+需要注意以下事项：
 
 - `decision_models/zephie_*.zm` 是本项目自研的**闭源模型包**（允许用来决策，不允许修改或提取权重）。
-- `native/vela/*.pyd` 与 `*.vpk` 是第三方开源内容，版权归上游作者，按其自身许可发布。
+- VELA v4.1/v4.2 模型及所需运行时组件由上游作者书面授权，可随本项目按
+  CC BY-NC-SA 4.0 分发；版权仍归上游作者，详见 [NOTICE](NOTICE)。
 
 ## 环境（开发）
 
@@ -47,23 +48,26 @@ python -m zephie_rolling_on.ui
 发布新模型包时，用户只需下载对应的模型包文件放进 `decision_models/`，
 无需重新下载整个软件。
 
-## 第三方开源模型：VELA
+## 第三方 VELA 模型与运行时
 
-`*.vpk` 包内的 VELA 来自第三方开源项目，**不是本项目自研模型**：
+本项目使用的 VELA v4.1/v4.2 模型及其运行时组件来自第三方项目，**不是本项目自研模型**。
+作者 `alfm201` 已书面允许本项目使用、修改、打包和再分发这些组件，并允许本项目按
+CC BY-NC-SA 4.0 发布；授权记录见
+[Issue #5](https://github.com/alfm201/adventure/issues/5#issuecomment-6138391205)。
+版权仍归 `alfm201` 所有，该授权不覆盖其无权授权的第三方游戏图片或其他素材。
 
 - 上游项目：**[alfm201/adventure](https://github.com/alfm201/adventure)**
-- 使用的部分：`src/policies/vela`（价值表推理，depth=2）
+- 使用的部分：`src/zephie_rolling_on/decision_models/vela_package.py`（价值表推理，depth=2）
 - 本仓库的改动：仅做**薄封装**——把我们的状态转成其快照格式、把返回值转成我们的动作约定；
   推理逻辑与权重均取自上游，未作修改
 - 两个版本，各需自己的原生引擎（模块名不同，可同时加载）：
 
 | 包 | 权重 | 搜索 | 来源 |
 |---|---|---|---|
-| `vela_v4.vpk` | `VELAV4`，约 1 GB | window=24 | 上游 `vela-v4` 标签 |
 | `vela_v4.1.vpk` | COMPACT48，约 38 MB | horizon=48 | 上游 `main`（v4.1 标签里仍是 v4 引擎） |
 | `vela_v4.2.vpk` | COMPACT100 Hinge，约 87 MB | horizon=100 | 上游 `main`@`bc0e2fc6` |
 
-版权与许可归上游作者所有；如上游许可与本项目不同，以**上游许可**为准。
+作者不要求署名，但本项目保留上游项目与授权记录以便核查。
 
 ## 功能
 
