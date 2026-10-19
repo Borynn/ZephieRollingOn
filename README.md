@@ -61,16 +61,18 @@ CC BY-NC-SA 4.0 发布；授权记录见
 
 软件内置 VELA v4.2 和后续模型 LYRA v1，并兼容已有的 VELA v4.1 模型包：
 
-| 包 | 权重 | 推理方式 |
-|---|---|---|
-| `vela_v4.1.vpk` | COMPACT48，约 38 MB | CPU，搜索窗口 48 |
-| `vela_v4.2.vpk` | COMPACT100 Hinge，约 87 MB | CPU，搜索窗口 100 |
-| `lyra_v1.vpk` | FP32，约 25 MB | GPU 优先，失败回退 CPU |
+| 包 | 权重 | 推理方式 | 模型性能（参考平均终格） |
+|---|---|---|---|
+| `vela_v4.1.vpk` | COMPACT48，约 38 MB | CPU，搜索窗口 48 | 约 1876 格 |
+| `vela_v4.2.vpk` | COMPACT100 Hinge，约 87 MB | CPU，搜索窗口 100 | 约 1877 格 |
+| `lyra_v1.vpk` | FP32，约 25 MB | GPU 优先，失败回退 CPU | 约 1879 格 |
+
+**LYRA v1 运行说明：**
 
 - 默认优先 DirectML GPU，初始化或推理失败后自动切换 CPU；实际设备显示在导入状态及建议中。
 - 支持兼容 DirectML 的 AMD、Intel、NVIDIA 显卡，不需要另装 CUDA。
 - 参考决策耗时：GPU **28 ms**、CPU **45 ms**（Ryzen 7 7800X3D / Radeon RX 7900 XT，
-  决策中位数）；实际耗时随设备与局面变化。上游研究参考终格约 **1879 格**。
+  决策中位数）；实际耗时随设备与局面变化。
 - 首次使用 LYRA 请更新到支持包内引擎的新版软件；原有 VELA 模型仍可继续使用。
 
 只导入可信来源的 VPK：包内引擎会执行本地代码。
