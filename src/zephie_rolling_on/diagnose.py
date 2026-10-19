@@ -320,7 +320,10 @@ def _bound_game_window() -> tuple[int, str] | None:
     return None
 
 
-def check_capture() -> list[Check]:
+def check_capture(bound_window: tuple[int, str] | None = None) -> list[Check]:
+    # 本轮失败时不能让打包逻辑误用之前某次自检留下的画面。
+    global _last_captured_frame
+    _last_captured_frame = None
     out: list[Check] = []
     try:
         from zephie_rolling_on.vision.capture import (
@@ -359,7 +362,9 @@ def check_capture() -> list[Check]:
     # 以前还会顺带试最多 6 个其它大窗口，但 WGC 对资源管理器这类窗口本就不支持，
     # 逐窗重试既把结论弄成误报、又把同一条失败路径反复触发——而「会话创建失败」
     # 是机器级条件、与窗口无关，重试没有任何意义。
-    bound = _bound_game_window()
+    # 界面导出时传入当前面板的内存绑定状态。多开时不能依赖共享 yaml，
+    # 而普通绑定默认也不会立即写入 yaml。
+    bound = bound_window if bound_window is not None else _bound_game_window()
     if bound is None:
         out.append(
             Check(
@@ -415,7 +420,6 @@ def check_capture() -> list[Check]:
             h, w = frame.shape[:2]
             # 留住这一帧：导出日志会把它连同区域标注一起打进 zip —— 用户反馈
             # 「识别不对」时，光看日志只能看到结论，看不到他当时看到的画面。
-            global _last_captured_frame
             _last_captured_frame = frame
             out.append(
                 Check(
@@ -515,7 +519,10 @@ def check_models() -> list[Check]:
 # Report
 # ---------------------------------------------------------------------------
 
-def run_checks() -> list[Check]:
+def run_checks(*, bound_window: tuple[int, str] | None = None) -> list[Check]:
+    def check_bound_capture() -> list[Check]:
+        return check_capture(bound_window)
+
     checks: list[Check] = []
     for fn in (
         check_windows,
@@ -525,7 +532,7 @@ def run_checks() -> list[Check]:
         check_dpi,
         check_dependencies,
         check_resources,
-        check_capture,
+        check_bound_capture,
         check_models,
     ):
         try:

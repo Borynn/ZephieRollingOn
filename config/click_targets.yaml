@@ -25,8 +25,8 @@ lucky_confirm:
 # 「格子识别失败自动重标」时执行；若窗口移动/改分辨率，坐标会失效且点击不会报错。
 # 检测配置见下方 toggle_adventure_ui_detect
 toggle_adventure_ui:
-  x: 1309
-  y: 864
+  x: 1629
+  y: 1043
 
 # 开关按钮自动识别（单模板；以上次坐标为中心扩框）
 toggle_adventure_ui_detect:

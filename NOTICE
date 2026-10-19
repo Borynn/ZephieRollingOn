@@ -8,7 +8,7 @@ Zephie Rolling On — NOTICE
 ## 1. 许可范围 / Scope
 
 本项目以 **CC BY-NC-SA 4.0（署名—非商业性使用—相同方式共享 4.0 国际）**
-许可发布，原文见 [`LICENSE`](LICENSE)。VELA v4.1/v4.2 组件已获其作者书面许可，
+许可发布，原文见 [`LICENSE`](LICENSE)。VELA / LYRA 系列模型及配套组件已获其作者书面许可，
 可随本项目按该许可分发；**但下列内容不在该许可范围内**，适用各自条款：
 
 **适用 CC BY-NC-SA 4.0 许可**
@@ -19,13 +19,10 @@ Zephie Rolling On — NOTICE
 - `config/` 下的配置模板
 - `docs/`、`README.md` 等文档
 - `model_host.exe`：本项目的运行时组件（编译产物，源码不另行提供）
-- 当前便携包内置的 `decision_models/vela_v4.2.vpk` 及其所需的 v4.2 推理组件：
-  经上游作者书面许可，详见第 2 节；兼容的 v4.1 组件亦适用该授权
+- 当前便携包内置的 `decision_models/vela_v4.2.vpk`、`decision_models/lyra_v1.vpk`
+  及其配套推理组件；兼容的 VELA v4.1 组件亦适用同等授权，详见第 2 节
 
 **不适用 CC BY-NC-SA 4.0 许可**
-
-- `decision_models/lyra_v1.vpk` —— 开源 LYRA 模型、上游衍生引擎与资源，适用包内
-  `LICENSES.txt`，来源为 https://github.com/alfm201/adventure ，详见第 2.1 节。
 
 - `decision_models/*.zm` —— 闭源模型包，保留所有权利。见下文第 3 节。
 - 游戏相关的素材与数据（卡面图、界面模板、地图数据）—— 版权归游戏发行商所有，
@@ -33,48 +30,27 @@ Zephie Rolling On — NOTICE
 
 第三方依赖（Python 包等）按各自许可发布，详见 `requirements.txt` / `pyproject.toml`。
 
-## 2. 第三方 VELA 模型与运行时
+## 2. 第三方 VELA / LYRA 系列模型与运行时
 
-VELA v4.1/v4.2 的模型文件与运行所需的推理组件来自第三方项目，**不是本项目自研内容**。
+VELA v4.1、v4.2 及后续模型 LYRA v1 均来自第三方项目
+[alfm201/adventure](https://github.com/alfm201/adventure)。
 其版权归 `alfm201` 所有；`alfm201` 已书面允许本项目使用、修改、打包和再分发这些
-组件，并允许本项目按 CC BY-NC-SA 4.0 发布：
+组件，并允许本项目按 CC BY-NC-SA 4.0 发布。该授权明确涵盖后续版本、不同架构与新模型系列：
 
 <https://github.com/alfm201/adventure/issues/5#issuecomment-6138391205>
 
 该授权也允许商业或非商业使用，但不涵盖 `alfm201` 无权授权的第三方游戏图片或其他素材。
-本项目实际使用与分发的 VELA 组件如下：
+本项目对模型进行状态格式转换、接口适配与打包，未重新训练模型。
+便携包内置 VELA v4.2 和 LYRA v1，并保留对 VELA v4.1 的兼容。
 
-- 上游项目：**alfm201/adventure** — <https://github.com/alfm201/adventure>
-- 使用部分：`src/zephie_rolling_on/decision_models/vela_package.py`（价值表推理，depth=2）
-- 本仓库的改动：仅做**薄封装**——状态格式转换与返回值映射；推理逻辑与权重均取自
-  上游，未作修改
-- 引擎来源：v4.1 见上游 `main` 分支（`vela-v4.1` 标签里仍是 v4 引擎）；
-  v4.2 见上游 `main` 的相应版本
-
-| 包 | 权重格式 | 体积 | 搜索窗口 |
+| 包 | 权重格式 | 体积 | 推理方式 |
 |---|---|---|---|
-| `vela_v4.1.vpk` | COMPACT48 | 约 38 MB | 48 |
-| `vela_v4.2.vpk` | COMPACT100 Hinge | 约 87 MB | 100 |
+| `vela_v4.1.vpk` | COMPACT48 | 约 38 MB | CPU，搜索窗口 48 |
+| `vela_v4.2.vpk` | COMPACT100 Hinge | 约 87 MB | CPU，搜索窗口 100 |
+| `lyra_v1.vpk` | FP32 | 约 25 MB | GPU 优先，失败回退 CPU |
 
-## 2.1 第三方 LYRA 模型与包内引擎
-
-`decision_models/lyra_v1.vpk` 随仓库及正式 Release 分发。上游项目为
-<https://github.com/alfm201/adventure>，作者 `alfm201`，冻结提交
-`f173abf7f502e5969917f81a1bd02745d7e834f8`。该模型不是本项目自研模型。
-
-- 模型数据：LYRA V20 FP32 ONNX 与特征表。上游在其拥有的权利范围内，免费允许使用、
-  复制、修改、制作衍生内容、打包与再分发，包括商业使用和收费分发，不要求署名或额外许可。
-- 包内可读引擎：基于上游实现的特征构造、一步评估与动作聚合，按上游 0BSD 许可提供。
-  本项目增加了公开接口映射、DirectML/CPU 选择、失败回退及 VPK 集成，未重新训练模型。
-- 依赖：Windows 便携包内共享的 ONNX Runtime DirectML 适用其自身许可，随包保留
-  `onnxruntime/LICENSE` 与 `onnxruntime/ThirdPartyNotices.txt`。上游浏览器 WASM 运行时
-  没有打入此 VPK；包内上游许可文件可能为完整性保留其原始声明。
-- 来源与完整许可：见 VPK 内的 `SOURCE.json`、`LICENSES.txt`。分发本项目提供的 VPK
-  时请一并保留包内声明；上游内容的使用权仍以其原始许可为准。
-
-上述 LYRA 授权**不覆盖本软件、`.zm`、本项目的 Zephie 展示图片或其他第三方游戏素材**；
-这些内容分别适用本文件说明的条款。`.zm` 的非商业、调用方式与署名限制不扩展到 LYRA 模型数据。
-模型及引擎按「原样」提供，不提供任何担保。
+分发时请保留模型包内的来源、许可及第三方声明。ONNX Runtime DirectML 等第三方依赖仍适用
+其自身许可，相关文件随便携包提供。本项目的分发许可不取代上游原有许可。
 
 ## 3. 自研闭源模型包：`.zm`
 
@@ -84,7 +60,7 @@ VELA v4.1/v4.2 的模型文件与运行所需的推理组件来自第三方项�
   付费代跑、销售或其他以商业获益为目的的产品或服务。需要商业授权请通过本项目仓库联系权利人。
 - 仅允许通过本项目公开的 [模型调用契约](docs/MODEL_PACKAGE_CONTRACT.md) 及本项目同款
   `model_host.exe` 宿主调用方式，使用未经修改的 `.zm` 模型包进行非商业决策。
-  其他程序采用相同调用方式时，同样必须遵守本节全部条件；这不授予提取内部实现的许可。
+  其他程序采用相同调用方式时，同样必须遵守本节全部条件。
 - **使用必须署名**：须在软件界面、关于页或随附说明的显著位置标注
   「使用 Zephie Rolling On 模型包」，并提供可访问的完整项目地址：
   **<https://github.com/Borynn/ZephieRollingOn>**。
@@ -93,26 +69,20 @@ VELA v4.1/v4.2 的模型文件与运行所需的推理组件来自第三方项�
 - 未经另行书面许可，不得修改、反编译、逆向分析、提取模型权重或决策实现，
   不得绕过既定调用方式使用模型，亦不得将模型作为其他产品的组件再分发。
 
-本节为 `.zm` 的独立使用条款，**不属于 CC BY-NC-SA 4.0 授权**，也不适用于 LYRA
-等第三方开源模型。依法无需取得许可的使用不受本节影响。
-
-`.zm` 为不透明数据文件，仅定义包内**是否可被解释**与**是否被改动过**。
-**被改动过的包会被拒绝加载。**
-
-上述展示与署名要求属于使用许可条件，不是强制显示的技术保证：调用方仍可能不请求或
-不绘制图片。包内含有图片、签名校验或本项目界面正常显示图片，都不能保证其他客户端必然展示。
+本节为 `.zm` 的独立使用条款，**不属于 CC BY-NC-SA 4.0 授权**，也不适用于 VELA / LYRA
+等第三方模型。依法无需取得许可的使用不受本节影响。
 
 ## 4. 游戏素材与数据
 
 以下内容是从游戏中提取或截取的识别用素材，**版权归游戏发行商所有**：
 
 - `assets/lucky_cards/templates/` —— 卡面图标
-- `assets/ui/` —— 界面模板与图标
+- `assets/ui/` 中的游戏界面截图与识别模板
 - `map.xlsx`、`map_info.txt` —— 地图数据
 - `config/regions.yaml`、`config/click_targets.yaml` —— 识别区域与点击坐标
 
-这些素材**仅用于程序内的图像识别**，随本仓库发布是为了让软件可直接运行与学习研究，
-**不主张任何权利**。若版权方有异议，请联系我们，我们会立即移除相关内容。
+上述游戏素材用于程序内图像识别，本项目不主张其版权；本项目自绘展示图片适用第 1 节的许可。
+如涉及权利问题，请通过本项目仓库联系处理。
 
 本项目与游戏发行商、开发商**无任何关联**，未获其授权或认可。
 
@@ -131,6 +101,4 @@ VELA v4.1/v4.2 的模型文件与运行所需的推理组件来自第三方项�
 > 本作品使用了 Zephie Rolling On 的代码 / 组件。
 > <https://github.com/Borynn/ZephieRollingOn>
 
-（VELA 作者不要求署名；如使用了 VELA，仍建议注明上游项目 alfm201/adventure。）
-
-LYRA 上游许可不强制署名；本项目仍随包保留来源、适用许可与第三方声明以便核查。
+第三方组件遵循第 2 节所述授权及其适用许可。

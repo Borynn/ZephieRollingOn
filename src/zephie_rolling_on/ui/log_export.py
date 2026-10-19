@@ -116,7 +116,7 @@ def environment_report() -> str:
     return "\n".join(lines) + "\n"
 
 
-def self_check_report() -> str:
+def self_check_report(bound_window: tuple[int, str] | None = None) -> str:
     """现场跑一遍环境自检，返回报告文本。
 
     自检含「实际截屏测试」，会真的截一张图，所以**只能在脚本停止后**调用
@@ -124,7 +124,7 @@ def self_check_report() -> str:
     """
     from zephie_rolling_on.diagnose import render, run_checks
 
-    text, _ok = render(run_checks())
+    text, _ok = render(run_checks(bound_window=bound_window))
     # 自检为验证截屏会绑定窗口并留下 WGC 会话，导出后应释放，避免占着不放
     try:
         from zephie_rolling_on.vision.capture_wgc import release_wgc_session
@@ -236,7 +236,12 @@ def _bundle_name() -> str:
     return f"ZephieLog_v{_app_version()}_{stamp}.zip"
 
 
-def export_bundle(log_text: str, *, dest_dir: Path | None = None) -> Path:
+def export_bundle(
+    log_text: str,
+    *,
+    dest_dir: Path | None = None,
+    bound_window: tuple[int, str] | None = None,
+) -> Path:
     """把日志与自检材料打成一个 zip，返回 zip 路径。
 
     根目录不可写时回退到临时目录。自检报告若生成失败（例如缺依赖），仍会导出
@@ -250,7 +255,7 @@ def export_bundle(log_text: str, *, dest_dir: Path | None = None) -> Path:
         candidates.append(Path(os.environ.get("TEMP", ".")))
 
     try:
-        check_text = self_check_report()
+        check_text = self_check_report(bound_window)
     except Exception as exc:  # noqa: BLE001
         check_text = (
             "自检未能完成："
@@ -312,7 +317,13 @@ class LogExportDialog:
     """
 
     def __init__(
-        self, master, log_text: str, *, on_log=None, on_closed=None
+        self,
+        master,
+        log_text: str,
+        *,
+        bound_window: tuple[int, str] | None = None,
+        on_log=None,
+        on_closed=None,
     ) -> None:
         import queue
         import threading
@@ -329,9 +340,12 @@ class LogExportDialog:
         self._queue: "queue.Queue" = queue.Queue()
         self._on_log = on_log or (lambda _m: None)
         self._on_closed = on_closed or (lambda: None)
+        self._master = master
+        self._bound_window = bound_window
         self._result: Path | None = None
         self._error = ""
         self._closed = False
+        self._stable_size: tuple[int, int] | None = None
 
         # 先还原最小化的主窗，否则本窗口按 master 坐标居中会落到屏幕外
         # （最小化时 rootx/rooty 为 -32000），而它随后 grab_set 会让界面不可点。
@@ -343,9 +357,16 @@ class LogExportDialog:
         restored = ensure_master_visible(master)
 
         dialog = tk.Toplevel(master)
+        # 测量内容需要 update_idletasks；先隐藏，避免 Tk 在定位前把窗口
+        # 映射到默认的左上角，随后再跳到主窗口中央。
+        dialog.withdraw()
         self._dialog = dialog
         dialog.title("导出日志")
         dialog.configure(bg=theme["bg"])
+        # 自绘标题栏去掉系统拖动区域，弹窗位置由程序控制。
+        dialog.overrideredirect(True)
+        # 点击窗口空白处也应激活窗口，尤其是上层窗口遮住它后重新点回来的场景。
+        dialog.bind("<Button-1>", self._activate, add="+")
         dialog.resizable(False, False)
         # 主窗刚由最小化还原时不能设 transient：窗口管理器会把本窗口 withdraw
         # （坐标正确但完全不可见），而它随后 grab_set 会让界面既无弹窗也无响应。
@@ -360,6 +381,16 @@ class LogExportDialog:
 
         shell = tk.Frame(dialog, bg=theme["bg"], padx=16, pady=14)
         shell.pack(fill="both", expand=True)
+        titlebar = tk.Frame(shell, bg=theme["bg"])
+        titlebar.pack(fill="x", pady=(0, 8))
+        tk.Label(
+            titlebar,
+            text="导出日志",
+            anchor="w",
+            bg=theme["bg"],
+            fg=theme["text"],
+            font=cute_font(9, bold=True),
+        ).pack(side="left", fill="x", expand=True)
         card = tk.Frame(
             shell,
             bg=theme["card"],
@@ -376,7 +407,7 @@ class LogExportDialog:
             text="Zephie正在整理日志…",
             anchor="w",
             justify="left",
-            wraplength=420,
+            wraplength=self._wraplength(master),
             bg=theme["card"],
             fg=theme.get("accent_deep", theme["accent_dark"]),
             font=cute_font(13),
@@ -388,7 +419,7 @@ class LogExportDialog:
             text="会同时生成一份环境自检报告，可能需要几秒。",
             anchor="w",
             justify="left",
-            wraplength=420,
+            wraplength=self._wraplength(master),
             bg=theme["card"],
             fg=theme["text"],
             font=cute_font(9, bold=False),
@@ -408,6 +439,21 @@ class LogExportDialog:
             dialog.destroy()
             # 通知调用方恢复「导出日志」按钮状态
             self._on_closed()
+
+        tk.Button(
+            titlebar,
+            text="×",
+            command=_close,
+            relief="flat",
+            borderwidth=0,
+            bg=theme["bg"],
+            fg=theme["text"],
+            activebackground=theme["border"],
+            activeforeground=theme["text"],
+            font=cute_font(12),
+            width=3,
+            takefocus=True,
+        ).pack(side="right")
 
         self._btn_close = RoundedButton(
             self._btn_row,
@@ -434,26 +480,44 @@ class LogExportDialog:
             width=140,
         )
 
+        # 先按完成态测量最终布局，再恢复导出中的文案。这样整个过程始终是
+        # 同一个、同一尺寸、同一位置的窗口，只切换内容，不会看起来像关闭后重开。
+        self._title.config(text="日志已导出！")
+        self._detail.config(
+            text=f"已保存到程序目录：\n{_bundle_name()}\n\n"
+            "把整个 zip 发给我们就行。\n"
+            "（其中包含你的部分设置与窗口信息，仅用于排查问题）"
+        )
+        self._btn_reveal.pack(side="right")
+        self._btn_close.pack(side="right", padx=(0, 8))
+        self._btn_row.pack(fill="x", pady=(14, 2))
+        dialog.update_idletasks()
+        self._stable_size = (
+            max(dialog.winfo_reqwidth(), 320),
+            max(dialog.winfo_reqheight(), 160),
+        )
+        self._btn_reveal.pack_forget()
+        self._btn_close.pack_forget()
+        self._btn_row.pack_forget()
+        self._title.config(text="Zephie正在整理日志…")
+        self._detail.config(text="会同时生成一份环境自检报告，可能需要几秒。")
+
         dialog.protocol("WM_DELETE_WINDOW", _close)
+        # 隐藏状态下先计算好最终尺寸和位置，再显示；导出中与完成态共享这一窗体。
         self._center(master)
+        dialog.deiconify()
         try:
             dialog.grab_set()
         except tk.TclError:
             pass
-        try:
-            dialog.attributes("-topmost", True)
-            dialog.lift()
-            dialog.focus_force()
-            dialog.after(200, lambda: dialog.attributes("-topmost", False))
-        except tk.TclError:
-            pass
+        self._activate()
         # 置顶会吞掉先前请求的位置（实测落到 (0,0) 或 Windows 级联位置），
         # 所以这里再定位一次。
         self._center(master)
 
         threading.Thread(
             target=self._worker,
-            args=(log_text,),
+            args=(log_text, self._bound_window),
             name="log-export",
             daemon=True,
         ).start()
@@ -461,20 +525,73 @@ class LogExportDialog:
 
     # -- 内部 --
 
-    def _center(self, master) -> None:
-        """屏幕居中偏上。见 ``ui_geometry.center_on_screen``。
-
-        用屏幕坐标而非 ``master`` 坐标：主窗最小化时 ``rootx/rooty`` 为 -32000，
-        按 master 居中的弹窗会落到屏幕外，而它已 ``grab_set()``，用户既看不到
-        弹窗又点不动界面。``master`` 参数保留仅为签名兼容。
-        """
-        from zephie_rolling_on.ui.ui_geometry import center_on_screen
-
-        center_on_screen(self._dialog)
-
-    def _worker(self, log_text: str) -> None:
+    def _activate(self, _event=None) -> None:
+        """将弹窗提到前面并聚焦；点击标题区或任意空白位置均可触发。"""
+        if self._closed:
+            return
         try:
-            path = export_bundle(log_text)
+            self._dialog.attributes("-topmost", True)
+            self._dialog.lift()
+            self._dialog.focus_force()
+            self._dialog.after(
+                250,
+                lambda: self._dialog.attributes("-topmost", False)
+                if not self._closed and self._dialog.winfo_exists()
+                else None,
+            )
+        except Exception:
+            pass
+
+    def _center(self, master) -> None:
+        """按主窗口中心定位，并约束在当前屏幕可见范围内。"""
+        dialog = self._dialog
+        try:
+            dialog.update_idletasks()
+            sw, sh = int(dialog.winfo_screenwidth()), int(dialog.winfo_screenheight())
+            requested_width, requested_height = self._stable_size or (
+                dialog.winfo_reqwidth(), dialog.winfo_reqheight()
+            )
+            width = min(requested_width, max(240, int(sw * 0.9)))
+            height = min(requested_height, max(160, int(sh * 0.9)))
+            try:
+                mx, my = int(master.winfo_rootx()), int(master.winfo_rooty())
+                mw, mh = int(master.winfo_width()), int(master.winfo_height())
+                if mx < 0 or my < 0 or mw <= 1 or mh <= 1:
+                    raise ValueError("主窗口尚无有效位置")
+                x, y = mx + (mw - width) // 2, my + (mh - height) // 2
+            except Exception:
+                x, y = (sw - width) // 2, (sh - height) // 2
+            x = max(0, min(x, max(0, sw - width)))
+            y = max(0, min(y, max(0, sh - height)))
+            dialog.geometry(f"{width}x{height}+{x}+{y}")
+        except Exception:
+            pass
+
+    @staticmethod
+    def _wraplength(master) -> int:
+        """根据屏幕宽度换行，适配低分辨率和不同系统缩放。"""
+        try:
+            usable = int(master.winfo_screenwidth() * 0.9) - 100
+            return max(120, min(420, usable))
+        except Exception:
+            return 360
+
+    def _refit(self, master) -> None:
+        """在完成或失败文案更新后重新测量，避免内容被初始窗口尺寸裁切。"""
+        try:
+            wrap = self._wraplength(master)
+            self._title.configure(wraplength=wrap)
+            self._detail.configure(wraplength=wrap)
+            self._dialog.update_idletasks()
+            self._center(master)
+        except Exception:
+            pass
+
+    def _worker(
+        self, log_text: str, bound_window: tuple[int, str] | None = None
+    ) -> None:
+        try:
+            path = export_bundle(log_text, bound_window=bound_window)
             self._queue.put(("ok", path))
         except Exception as exc:  # noqa: BLE001
             self._queue.put(("error", f"{type(exc).__name__}: {exc}"))
@@ -505,6 +622,7 @@ class LogExportDialog:
         self._btn_reveal.pack(side="right")
         self._btn_close.pack(side="right", padx=(0, 8))
         self._btn_row.pack(fill="x", pady=(14, 2))
+        self._refit(self._master)
         self._on_log(f"[导出日志] 已保存：{path}")
 
     def _show_error(self, reason: str) -> None:
@@ -515,6 +633,7 @@ class LogExportDialog:
         self._detail.config(text=f"原因：{reason}")
         self._btn_close.pack(side="right")
         self._btn_row.pack(fill="x", pady=(14, 2))
+        self._refit(self._master)
         self._on_log(f"[导出日志] 失败：{reason}")
 
     def _on_reveal(self) -> None:

@@ -205,23 +205,6 @@ jobs:
             gh release delete $tag --repo $repo --yes
           }
 
-          # Built as an array, not a here-string: PowerShell requires a here-string
-          # terminator at column 0, which YAML indentation cannot satisfy.
-          # Backticks are avoided for the same reason (they escape in "")
-          # strings) -- 「」 carries the emphasis instead.
-          $notes = @(
-            "便携版 ZephieRollingOn v$env:VERSION。",
-            "",
-            "解压后运行 「ZephieRollingOn!.exe」 即可。启动时会请求管理员权限，",
-            "这是正常现象：截屏与点击注入需要提权，否则点击会被游戏静默丢弃。",
-            "",
-            "已内置决策模型包：vela_v4.2、m1_points、lyra_v1，无需另行下载。",
-            "LYRA 内置引擎，优先 GPU，失败自动回退 CPU；许可详见 NOTICE 及模型包内声明。",
-            "闭源 .zm 包未经书面许可禁止商用，须按本项目公开调用方式使用并注明项目地址。",
-            "",
-            "本版本更新了许可证与第三方授权说明：项目以 CC BY-NC-SA 4.0 发布；",
-            "VELA v4.1/v4.2 及相关运行时组件已获作者书面授权，详情见 NOTICE。",
-            "",
-            "交流 QQ 群：582530986"
-          ) -join "`n"
-          gh release create $tag $env:ZIP --title "ZephieRollingOn v$env:VERSION" --notes $notes
+          $notesFile = "docs/releases/v$env:VERSION.md"
+          if (-not (Test-Path $notesFile)) { throw "release notes not found: $notesFile" }
+          gh release create $tag $env:ZIP --title "ZephieRollingOn v$env:VERSION" --notes-file $notesFile

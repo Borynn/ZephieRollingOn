@@ -1117,7 +1117,8 @@ class ControlPanel:
             self._append_log("[导出日志] 请先停止脚本（等按钮恢复为「启动」），再导出日志。")
             return
 
-        if not self._resolved_hwnd():
+        bound_hwnd = self._resolved_hwnd()
+        if not bound_hwnd:
             self._append_log(
                 "[导出日志] 未绑定游戏窗口，已取消导出。"
                 "自检要实际截取游戏画面，请先绑定游戏窗口再导出。"
@@ -1134,6 +1135,10 @@ class ControlPanel:
         LogExportDialog(
             self.root,
             log_text,
+            bound_window=(
+                int(bound_hwnd),
+                self._bound.title or "",
+            ) if self._bound else None,
             on_log=self._append_log,
             on_closed=self._on_log_export_closed,
         )

@@ -442,6 +442,11 @@ class ModelImportProgressDialog(FixedModelDialog):
             self._on_log(f"[决策模型] {name}导入失败：{reason}")
             return
         self._pct = 100
+        backend = getattr(self._model.package, 'runtime_info', {})
+        if backend.get('label'):
+            self._on_log(f"[决策模型] {name}推理设备：{backend['label']}")
+        if backend.get('fallback_reason'):
+            self._on_log(f"[决策模型] GPU回退原因：{backend['fallback_reason']}")
         self._pct_label.config(text="100%")
         self._draw_ring()
         self._done_label.config(text=f"{name}导入完成！")
