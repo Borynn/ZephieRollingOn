@@ -15,6 +15,14 @@ param(
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
+# A clean CI checkout has no editable project installation. Make the same
+# source tree visible to validation subprocesses and PyInstaller.
+$sourcePath = Join-Path $Root "src"
+$env:PYTHONPATH = if ($env:PYTHONPATH) {
+    $sourcePath + [IO.Path]::PathSeparator + $env:PYTHONPATH
+} else {
+    $sourcePath
+}
 if ($BuildTag -and $BuildTag -notmatch '^[a-zA-Z0-9_-]+$') { throw "Invalid BuildTag" }
 $buildBase = if ($BuildTag) { Join-Path $Root "dist\$BuildTag" } else { Join-Path $Root "dist" }
 function Assert-BuildPath([string]$Path) {
