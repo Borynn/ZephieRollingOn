@@ -8,12 +8,22 @@
 param(
     # Optional: model_host.exe to bundle. It is a separate runtime component and
     # is not part of this repository.
-    [string]$ModelHostExe = ""
+    [string]$ModelHostExe = "",
+    [string]$BuildTag = ""
 )
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
+if ($BuildTag -and $BuildTag -notmatch '^[a-zA-Z0-9_-]+$') { throw "Invalid BuildTag" }
+$buildBase = if ($BuildTag) { Join-Path $Root "dist\$BuildTag" } else { Join-Path $Root "dist" }
+function Assert-BuildPath([string]$Path) {
+    $full = [IO.Path]::GetFullPath($Path)
+    $base = [IO.Path]::GetFullPath($buildBase).TrimEnd('\') + '\'
+    if (-not $full.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing cleanup outside build output: $full"
+    }
+}
 
 $py = (Get-Command python -ErrorAction SilentlyContinue)
 if (-not $py) { throw "python not on PATH (activate zephie_rolling_on first)" }
@@ -53,8 +63,10 @@ if (-not $Version) { throw "empty __version__ in $versionFile" }
 Write-Host "Version (from __init__.py): $Version"
 
 $distName = "ZephieRollingOn!"
-$workDist = Join-Path $Root "dist\$distName"
-$outDir = Join-Path $Root "dist\ZephieRollingOn_v$Version"
+$workDist = Join-Path $buildBase $distName
+$outDir = Join-Path $buildBase "ZephieRollingOn_v$Version"
+Assert-BuildPath $workDist
+Assert-BuildPath $outDir
 $entry = Join-Path $Root "src\zephie_rolling_on\ui\__main__.py"
 $iconIco = Join-Path $Root "assets\ui\zehpie_window_icon.ico"
 $rthTcl = Join-Path $Root "scripts\pyi_rth_tcl_tk.py"
@@ -91,11 +103,17 @@ function Invoke-Gate {
 }
 
 Invoke-Gate "check_undefined_names.py"
+Invoke-Gate "check_lock.py"
 Invoke-Gate "check_image_io.py"
 Invoke-Gate "check_gitignore.py"
 # 私有词表是 gitignored 的：本地有、全新克隆（含 CI）没有。缺词表时该门禁
 # 会报 INDEPENDENCE_SKIPPED 并返回 0，属于设计内降级，所以只告警不中止。
 Invoke-Gate "audit_independence.py" -PartialMarker "INDEPENDENCE_SKIPPED"
+
+& python -c "import onnxruntime as o; assert 'DmlExecutionProvider' in o.get_available_providers(), 'Install onnxruntime-directml (remove CPU-only onnxruntime first)'; print('ONNX Runtime',o.__version__,o.get_available_providers())"
+if ($LASTEXITCODE -ne 0) { throw "DirectML runtime is required for the Windows portable build" }
+& python -m unittest discover -s tests -p test_embedded_vpk.py
+if ($LASTEXITCODE -ne 0) { throw "Embedded VPK contract tests failed" }
 
 # Avoid host conda base Tcl leaking into the frozen app search path.
 $env:TCL_LIBRARY = $null
@@ -111,6 +129,8 @@ Write-Host "PyInstaller onedir (requires administrator)..."
 & python -m PyInstaller `
     --noconfirm --clean --windowed --onedir `
     --name $distName `
+    --distpath $buildBase `
+    --workpath (Join-Path $Root "build\portable$BuildTag") `
     --uac-admin `
     --paths (Join-Path $Root "src") `
     --icon $iconIco `
@@ -149,6 +169,7 @@ foreach ($rel in @(
     "onnxruntime\datasets"
 )) {
     $p = Join-Path $internal $rel
+    Assert-BuildPath $p
     if (Test-Path $p) {
         Write-Host "Strip $rel"
         Remove-Item -Recurse -Force $p
@@ -164,12 +185,14 @@ $envTk = Join-Path $pyPrefix "Library\lib\tk8.6"
 $envBin = Join-Path $pyPrefix "Library\bin"
 if (Test-Path $envTcl) {
     $dstTcl = Join-Path $internal "_tcl_data"
+    Assert-BuildPath $dstTcl
     Write-Host "Sync _tcl_data from $envTcl"
     if (Test-Path $dstTcl) { Remove-Item -Recurse -Force $dstTcl }
     Copy-Item -Recurse -Force $envTcl $dstTcl
 }
 if (Test-Path $envTk) {
     $dstTk = Join-Path $internal "_tk_data"
+    Assert-BuildPath $dstTk
     Write-Host "Sync _tk_data from $envTk"
     if (Test-Path $dstTk) { Remove-Item -Recurse -Force $dstTk }
     Copy-Item -Recurse -Force $envTk $dstTk
@@ -191,6 +214,7 @@ Copy-Item -Recurse -Force (Join-Path $workDist "*") $outDir
 foreach ($name in @("config", "assets")) {
     $src = Join-Path $Root $name
     $dst = Join-Path $outDir $name
+    Assert-BuildPath $dst
     if (Test-Path $dst) { Remove-Item -Recurse -Force $dst }
     Copy-Item -Recurse -Force $src $dst
 }
@@ -218,6 +242,7 @@ foreach ($f in @("map.xlsx.cache.json", "check_report.txt")) {
     }
 }
 $dataDir = Join-Path $outDir "data"
+Assert-BuildPath $dataDir
 if (Test-Path $dataDir) {
     Write-Host "Excluding runtime artifact: data\"
     Remove-Item -Recurse -Force $dataDir
@@ -283,8 +308,9 @@ if ($velaPyd) {
 # way a leftover package in the source tree can never leak into a release by
 # accident.
 $BundleModels = @(
-    "vela_v4.1.vpk",       # ~38 MB, COMPACT48
-    "zephie_m1_points.zm"  # ~17 MB
+    "vela_v4.2.vpk",       # COMPACT100 Hinge
+    "lyra_v1.vpk",         # Includes its open engine and import artwork
+    "zephie_m1_points.zm"
 )
 Get-ChildItem $dm -File -ErrorAction SilentlyContinue |
     Where-Object { $_.Extension -in ".zm", ".vpk", ".dll", ".so", ".dylib" } |
@@ -296,7 +322,7 @@ foreach ($m in $BundleModels) {
         Write-Host "Bundling model package: $m"
         Copy-Item -Force $src $dm
     } else {
-        Write-Warning "model package not found, skipping: decision_models\$m"
+        throw "required model package not found: decision_models\$m"
     }
 }
 

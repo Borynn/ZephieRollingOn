@@ -21,9 +21,13 @@ ROOT = Path(__file__).resolve().parents[1]
 CASES: list[tuple[str, bool]] = [
     # Open-source packages stay out of the repo; closed ones are tracked.
     ("decision_models/vela_v4.vpk", True),
+    ("decision_models/lyra_v1.vpk", False),
+    ("decision_models/vela_v4.1.vpk", True),
+    ("decision_models/vela_v4.2.vpk", False),
+    ("decision_models/zephie_m1_points.zm", False),
     # Shipped runtime component and closed packages are part of the repo.
     ("model_host.exe", False),
-    ("decision_models/zephie_example.zm", False),
+    ("decision_models/zephie_example.zm", True),
     # Build artifacts, regenerated on each build.
     ("ZephieRollingOn!.spec", True),
     ("map.xlsx.cache.json", True),

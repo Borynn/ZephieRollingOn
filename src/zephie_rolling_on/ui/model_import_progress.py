@@ -10,6 +10,8 @@ import tkinter as tk
 from collections.abc import Callable
 
 from PIL import Image, ImageTk
+from zephie_rolling_on.ui.fixed_model_dialog import FixedModelDialog
+from zephie_rolling_on.ui.model_art import read_import_art
 
 from zephie_rolling_on.decision_models.types import (
     DecisionModelImportResult,
@@ -21,7 +23,7 @@ from zephie_rolling_on.ui.zehpie_theme import (
     cute_font,
 )
 
-class ModelImportProgressDialog(tk.Toplevel):
+class ModelImportProgressDialog(FixedModelDialog):
     """后台调用 ``package.import_model(on_progress=...)``，完成后等用户点「完成」。"""
 
     def __init__(
@@ -38,18 +40,6 @@ class ModelImportProgressDialog(tk.Toplevel):
         super().__init__(master)
         self.title("模型导入")
         self.configure(bg=_UI["bg"])
-        # 先还原最小化的主窗，否则本窗口按 master 坐标居中会落到屏幕外
-        # （最小化时 rootx/rooty 为 -32000），而它随后 grab_set 会让界面不可点。
-        # 主窗刚由最小化还原时不设 transient：否则窗口会被 withdraw（不可见）。
-        from zephie_rolling_on.ui.ui_geometry import (
-            ensure_master_visible,
-            should_set_transient,
-        )
-
-        restored = ensure_master_visible(master)
-        if should_set_transient(master, restored=restored):
-            self.transient(master)
-        self.resizable(False, False)
         self._model = model
         self._on_finished = on_finished
         self._on_failed = on_failed
@@ -57,6 +47,7 @@ class ModelImportProgressDialog(tk.Toplevel):
         self._master = master
         # 两个布局各自需要的窗口宽度，_build() 里量出来；见 _refit()
         self._win_width = 0
+        self._win_height = 0
         # Import stickers come from the package itself when it carries them.
         self._art_busy_bytes = self._read_embedded_art("busy")
         self._art_done_bytes = self._read_embedded_art("done")
@@ -68,6 +59,7 @@ class ModelImportProgressDialog(tk.Toplevel):
         self._ring_angle = 0.0
         self._photos: list[ImageTk.PhotoImage] = []
         self._anim_job: str | None = None
+        self._poll_job: str | None = None
         self._preview_mode = preview_pct is not None
 
         self._font_title = cute_font(18)
@@ -81,8 +73,9 @@ class ModelImportProgressDialog(tk.Toplevel):
 
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._on_user_close)
-        self.after(50, self._poll_queue)
-        self.after(40, self._tick_ring)
+        self.bind('<Destroy>', self._cleanup_jobs, add='+')
+        self._poll_job = self.after(50, self._poll_queue)
+        self._anim_job = self.after(40, self._tick_ring)
         if self._preview_mode:
             self._pct_label.config(text=f"{self._pct}%")
             self._draw_ring()
@@ -111,26 +104,13 @@ class ModelImportProgressDialog(tk.Toplevel):
         self.update_idletasks()
         width = max(int(self._win_width), int(self.winfo_reqwidth()))
         height = int(self.winfo_reqheight())
-        self.geometry(f"{width}x{height}")
-        self._center(master if master is not None else self._master)
+        self.show_centered(width, max(self._win_height, height))
 
     def _center(self, master: tk.Misc) -> None:
-        """屏幕居中偏上。见 ``ui_geometry.center_on_screen``。
-
-        用屏幕坐标而非 ``master`` 坐标：主窗最小化时 ``rootx/rooty`` 为 -32000，
-        按 master 居中的弹窗会落到屏幕外，而它已 ``grab_set()``，用户既看不到
-        弹窗又点不动界面。``master`` 参数保留仅为签名兼容。
-        """
-        from zephie_rolling_on.ui.ui_geometry import center_on_screen
-
-        center_on_screen(self)
+        self._place_centered()
 
     def _read_embedded_art(self, which: str) -> bytes | None:
-        pkg = self._model.package
-        getter = getattr(pkg, "import_art_png", None)
-        if callable(getter):
-            return getter(which)
-        return None
+        return read_import_art(self._model.package, which)
 
     def _load_art_bytes(
         self, data: bytes | None, height: int = 210
@@ -296,13 +276,17 @@ class ModelImportProgressDialog(tk.Toplevel):
         # 否则切到「完成」时右侧文字会被裁掉。
         self.update_idletasks()
         w_busy = int(self.winfo_reqwidth())
+        h_busy = int(self.winfo_reqheight())
+        self._busy.pack_forget()
         self._done.pack(fill="both", expand=True)
         self.update_idletasks()
         w_done = int(self.winfo_reqwidth())
+        h_done = int(self.winfo_reqheight())
         self._done.pack_forget()
         self._busy.pack(fill="both", expand=True)
         self.update_idletasks()
         self._win_width = max(w_busy, w_done)
+        self._win_height = max(h_busy, h_done)
 
     def _draw_ring(self) -> None:
         c = self._ring
@@ -418,6 +402,7 @@ class ModelImportProgressDialog(tk.Toplevel):
         self._queue.put(("result", result))
 
     def _poll_queue(self) -> None:
+        self._poll_job = None
         if self._closed:
             return
         try:
@@ -434,7 +419,17 @@ class ModelImportProgressDialog(tk.Toplevel):
         except queue.Empty:
             pass
         if not self._closed:
-            self.after(50, self._poll_queue)
+            self._poll_job = self.after(50, self._poll_queue)
+
+    def _cleanup_jobs(self, event):
+        if event.widget is not self:
+            return
+        self._closed = True
+        for name in ('_poll_job', '_anim_job'):
+            job = getattr(self, name, None)
+            if job is not None:
+                self.after_cancel(job)
+                setattr(self, name, None)
 
     def _on_import_result(self, result: DecisionModelImportResult) -> None:
         self._result = result
@@ -465,6 +460,11 @@ class ModelImportProgressDialog(tk.Toplevel):
                 pass
             self._anim_job = None
         result = self._result or DecisionModelImportResult(ok=False, message="无结果")
+        # Release this modal before a failure callback restores the picker grab.
+        try:
+            self.grab_release()
+        except tk.TclError:
+            pass
         if self._done_ok and result.ok:
             if self._on_finished is not None:
                 try:
@@ -474,10 +474,6 @@ class ModelImportProgressDialog(tk.Toplevel):
         else:
             if self._on_failed is not None:
                 self._on_failed(self._model, result.message or "导入失败")
-        try:
-            self.grab_release()
-        except tk.TclError:
-            pass
         self.destroy()
 
     def _on_user_close(self) -> None:

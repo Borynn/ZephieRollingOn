@@ -9,7 +9,12 @@ _active: Any | None = None
 
 def set_active_decision_model(model: Any | None) -> None:
     global _active
+    previous = _active
     _active = model
+    if previous is not None and previous is not model:
+        close = getattr(previous, "close", None)
+        if callable(close):
+            close()
 
 
 def get_active_decision_model() -> Any | None:
@@ -17,8 +22,7 @@ def get_active_decision_model() -> Any | None:
 
 
 def clear_active_decision_model() -> None:
-    global _active
-    _active = None
+    set_active_decision_model(None)
 
 
 def active_model_ready() -> bool:

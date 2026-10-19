@@ -3,7 +3,7 @@
 Two package formats, selected by file extension:
 
   ``zephie_*.zm``  interpreted by ``model_host.exe`` (separate process)
-  ``*.vpk``        loaded in-process by a native engine
+  ``*.vpk``        loaded by a legacy native or package-embedded engine
 
 Both implement the same ``DecisionModelPackage`` protocol, so the rest of the
 application does not care which one it is holding.
@@ -23,6 +23,8 @@ from zephie_rolling_on.decision_models.vela_package import (
     PKG_SUFFIX as OPEN_PKG_SUFFIX,
 )
 from zephie_rolling_on.decision_models.vela_package import VelaPackageModel
+from zephie_rolling_on.decision_models.vela_package import read_vpk_header
+from zephie_rolling_on.decision_models.embedded_vpk import EmbeddedVpkModel, ENGINE_TYPE
 from zephie_rolling_on.paths import project_root
 
 PROJECT_ROOT = project_root()
@@ -62,6 +64,13 @@ def discover_decision_models(
         _add(p, lambda p=p: HostedDecisionModel(p, models_dir=root))
 
     for p in sorted(root.glob(f"*{OPEN_PKG_SUFFIX}"), key=lambda x: x.name.lower()):
-        _add(p, lambda p=p: VelaPackageModel(p))
+        def open_vpk(p=p):
+            header, _ = read_vpk_header(p)
+            if header.get('engine_type') == ENGINE_TYPE:
+                return EmbeddedVpkModel(p)
+            if header.get('engine_type'):
+                raise ValueError('Unsupported VPK engine type')
+            return VelaPackageModel(p)
+        _add(p, open_vpk)
 
     return found

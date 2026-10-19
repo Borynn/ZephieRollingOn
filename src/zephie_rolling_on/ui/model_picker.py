@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 import tkinter as tk
+import io
+import queue
+import threading
+from tkinter import ttk
+from PIL import Image, ImageTk
 from collections.abc import Callable
 from typing import Any
 
@@ -15,15 +20,18 @@ from zephie_rolling_on.decision_models import (
     models_dir,
 )
 from zephie_rolling_on.ui.model_import_progress import ModelImportProgressDialog
+from zephie_rolling_on.ui.fixed_model_dialog import FixedModelDialog
+from zephie_rolling_on.ui.model_art import read_import_art
 from zephie_rolling_on.ui.zehpie_theme import apply_zehpie_window_icon, make_ui
 
 # 同时可见约 2 张卡片的高度
 _CARD_OUTER_H = 118
 _LIST_VISIBLE_CARDS = 2
 _LIST_HEIGHT = _CARD_OUTER_H * _LIST_VISIBLE_CARDS + 8
+_DISCOVERY_LOCK = threading.Lock()
 
 
-class ModelPickerDialog(tk.Toplevel):
+class ModelPickerDialog(FixedModelDialog):
     """模型选择窗口。确认后调用所选模型的 ``import_model`` 并关闭。"""
 
     def __init__(
@@ -39,18 +47,6 @@ class ModelPickerDialog(tk.Toplevel):
         self._ui = make_ui()
         self.title("选择决策模型")
         self.configure(bg=self._ui["bg"])
-        # 先还原最小化的主窗，否则本窗口按 master 坐标居中会落到屏幕外
-        # （最小化时 rootx/rooty 为 -32000），而它随后 grab_set 会让界面不可点。
-        # 主窗刚由最小化还原时不设 transient：否则窗口会被 withdraw（不可见）。
-        from zephie_rolling_on.ui.ui_geometry import (
-            ensure_master_visible,
-            should_set_transient,
-        )
-
-        restored = ensure_master_visible(master)
-        if should_set_transient(master, restored=restored):
-            self.transient(master)
-        self.resizable(False, False)
         self._on_imported = on_imported
         self._on_log = on_log or (lambda _m: None)
         self._models_path = models_path
@@ -61,31 +57,44 @@ class ModelPickerDialog(tk.Toplevel):
         self._importing = False
         self._icon_photo = apply_zehpie_window_icon(self)
 
-        self._build()
+        self._scan_queue = queue.Queue()
+        self._scan_job = None
+        self.bind('<Destroy>', self._cleanup_scan, add='+')
+        self._build_loading()
         self._reload_models()
         self.protocol("WM_DELETE_WINDOW", self._on_cancel)
         self.bind("<Escape>", lambda _e: self._on_cancel())
 
-        self.update_idletasks()
-        self._center_on_master(master)
-        try:
-            self.grab_set()
-        except tk.TclError:
-            pass
-        self.focus_set()
-        # 再定位一次：focus/grab 类调用可能让窗口管理器丢掉先前请求的位置。
-        self._center_on_master(master)
+        self.show_centered(500, 440)
 
     def _center_on_master(self, master: tk.Misc) -> None:
-        """屏幕居中。见 ``ui_geometry.center_on_screen``。
+        self._place_centered()
 
-        方法名保留（调用点不变），但已改为屏幕居中：主窗最小化时 ``rootx/rooty``
-        为 -32000，按 master 居中的弹窗会落到屏幕外，而它已 ``grab_set()``，用户
-        既看不到弹窗又点不动界面。
-        """
-        from zephie_rolling_on.ui.ui_geometry import center_on_screen
+    def _build_loading(self):
+        ui = self._ui
+        self._loading = tk.Frame(self, bg=ui['bg'], padx=20, pady=20)
+        self._loading.pack(fill='both', expand=True)
+        data = read_import_art(None, 'busy')
+        if data:
+            with Image.open(io.BytesIO(data)) as image:
+                image = image.convert('RGBA')
+                image.thumbnail((250, 220), Image.Resampling.LANCZOS)
+                self._loading_photo = ImageTk.PhotoImage(image, master=self)
+            tk.Label(self._loading, image=self._loading_photo, bg=ui['bg']).pack(pady=(0, 12))
+        tk.Label(self._loading, text='正在加载模型列表…', bg=ui['bg'],
+                 fg=ui['text'], font=ui['font_title']).pack(pady=12)
+        self._scan_progress = ttk.Progressbar(self._loading, mode='indeterminate', length=280)
+        self._scan_progress.pack(pady=10)
+        self._scan_progress.start(20)
+        tk.Button(self._loading, text='取消', command=self._on_cancel,
+                  relief='flat', bd=0, padx=16, pady=6, bg=ui['card'],
+                  fg=ui['text'], activebackground=ui['border'],
+                  font=ui['font_body'], cursor='hand2').pack(pady=8)
 
-        center_on_screen(self, y_divisor=2)
+    def _cleanup_scan(self, event):
+        if event.widget is self and self._scan_job is not None:
+            self.after_cancel(self._scan_job)
+            self._scan_job = None
 
     def _build(self) -> None:
         ui = self._ui
@@ -179,6 +188,7 @@ class ModelPickerDialog(tk.Toplevel):
             bg=ui["bg"],
             fg=ui["faint"],
             font=ui["font_small"],
+            width=30,
         )
         self._path_hint.pack(side="left", fill="x", expand=True)
 
@@ -230,9 +240,36 @@ class ModelPickerDialog(tk.Toplevel):
             self._canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
 
     def _reload_models(self) -> None:
+        def worker():
+            try:
+                with _DISCOVERY_LOCK:
+                    ensure_models_dir(self._models_path)
+                    found = discover_decision_models(self._models_path)
+                self._scan_queue.put((found, ''))
+            except Exception as exc:
+                self._scan_queue.put(([], str(exc)))
+        threading.Thread(target=worker, name='dm-discover', daemon=True).start()
+        self._scan_job = self.after(40, self._poll_scan)
+
+    def _poll_scan(self):
+        self._scan_job = None
+        try:
+            models, error = self._scan_queue.get_nowait()
+        except queue.Empty:
+            self._scan_job = self.after(40, self._poll_scan)
+            return
+        self._scan_progress.stop()
+        self._loading.destroy()
+        self._build()
+        self._render_models(models)
+        if error:
+            self._empty_label.config(text='模型列表加载失败：\n' + error)
+        self.update_idletasks()
+        self.show_centered(max(500, self.winfo_reqwidth()), max(440, self.winfo_reqheight()))
+
+    def _render_models(self, models) -> None:
         ui = self._ui
-        ensure_models_dir(self._models_path)
-        self._models = discover_decision_models(self._models_path)
+        self._models = models
         for child in self._list_inner.winfo_children():
             child.destroy()
         self._card_frames.clear()
@@ -437,14 +474,23 @@ class ModelPickerDialog(tk.Toplevel):
             self._btn_cancel.config(state="normal")
             _ = msg
             self._on_log("[决策模型] 导入失败")
+            self.show_centered(*self._fixed_size)
 
-        ModelImportProgressDialog(
-            self,
-            model,
-            on_finished=on_finished,
-            on_failed=on_failed,
-            on_log=self._on_log,
-        )
+        self.withdraw()
+        try:
+            self._import_dialog = ModelImportProgressDialog(
+                self.master,
+                model,
+                on_finished=on_finished,
+                on_failed=on_failed,
+                on_log=self._on_log,
+            )
+        except Exception:
+            self._importing = False
+            self._btn_confirm.config(state='normal')
+            self._btn_cancel.config(state='normal')
+            self.show_centered(*self._fixed_size)
+            raise
 
     def _on_cancel(self) -> None:
         if self._importing:

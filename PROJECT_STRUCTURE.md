@@ -24,8 +24,8 @@ License: CC BY-NC-SA 4.0（范围豁免见 `LICENSE` / `NOTICE`：闭源 `.zm` �
 | `src/zephie_rolling_on/decision_models/model_host_client.py` | Packages served by `model_host.exe`; owns the host process |
 | `src/zephie_rolling_on/decision_models/vela_package.py` | Packages loaded natively in-process (same protocol) |
 | `src/zephie_rolling_on/paths.py` | Project root (source + frozen exe) |
-| `native/vela/` | Native model engines (CPU): v4 `vela_official` + v4.1 `vela_official_v41` + v4.2 `vela_official_v42`; required to import `.vpk` |
-| `decision_models/` | Model packages: `zephie_m1_points.zm` (served by `model_host.exe`) + `vela_v4.1.vpk` (in-process). Dispatch is by extension; the UI shows them uniformly. `vela_v4.vpk` (~1 GB) and `vela_v4.2.vpk` (~87 MB) ship as release assets, not in the repo (`.gitignore`: `decision_models/*.vpk` with an exception only for v4.1) |
+| `native/vela/` | Legacy VELA model engines (CPU): v4 `vela_official` + v4.1 `vela_official_v41` + v4.2 `vela_official_v42`; embedded-engine VPKs do not require these |
+| `decision_models/` | `zephie_m1_points.zm`, `vela_v4.2.vpk` and `lyra_v1.vpk` ship in the repository and official releases. Other local packages remain usable and are ignored by Git and the release builder. |
 | `model_host.exe` | Runtime component that serves `.zm` packages (compiled, committed here); required for a clone to run closed models |
 | `config/` | Regions, click targets, auto-click, … |
 | `config/auto_click.default.yaml` | Factory defaults for auto-click settings (shipped, tracked) |

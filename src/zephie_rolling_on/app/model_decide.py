@@ -158,6 +158,9 @@ def suggest_action_via_model(
     except Exception as exc:
         return f"决策模型调用失败: {exc}", None
 
+    backend_label = str(getattr(model, 'runtime_device_label', '') or '')
+    if backend_label:
+        name = f'{name} · {backend_label}'
     rank = rank_from_model_result(out, model_name=name)
     if not rank.actions:
         return "决策模型未返回可执行动作。", None

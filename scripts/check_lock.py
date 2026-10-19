@@ -105,26 +105,8 @@ def main() -> int:
             continue
 
         pinned = Version(pin)
-        for spec in req.specifier:
-            if spec.operator in (">=", "==", "~=", "==="):
-                target = Version(spec.version)
-                ok = (
-                    pinned >= target
-                    if spec.operator == ">="
-                    else pinned == target
-                )
-                if not ok:
-                    problems.append(
-                        f"{req.name}: pinned {pin} does not satisfy "
-                        f"declared {spec.operator}{spec.version}"
-                    )
-            elif spec.operator in ("<", "<=", "!="):
-                # Upper bounds are not currently used; flag so they are not
-                # silently ignored if someone adds one.
-                problems.append(
-                    f"{req.name}: lock check does not handle upper bound "
-                    f"{spec.operator}{spec.version}"
-                )
+        if not req.specifier.contains(pinned, prereleases=True):
+            problems.append(f"{req.name}: pinned {pin} does not satisfy {req.specifier}")
 
     if problems:
         print()

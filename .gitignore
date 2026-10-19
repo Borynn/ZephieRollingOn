@@ -23,17 +23,14 @@ venv/
 # can run the closed models as-is. It is a compiled component, not source.
 !model_host.exe
 
-# Open-source packages are large and are published as release attachments
-# instead of being committed.
-# EXCEPTION: the v4.1 package is small enough (~38 MB) to live in the repo, so a
-# plain clone gets it. `vela_v4.vpk` stays out at ~1 GB.
+# Only the release models below are allowed into the repository.
+# Other locally installed models remain usable, but are not published.
 decision_models/*.vpk
-!decision_models/vela_v4.1.vpk
+!decision_models/vela_v4.2.vpk
+!decision_models/lyra_v1.vpk
 
-# Closed packages are tracked: they are small, and issue-able model updates are
-# just new files here. See README for the distribution model.
-# Comment the next line in to stop publishing them.
-# decision_models/*.zm
+decision_models/*.zm
+!decision_models/zephie_m1_points.zm
 
 # Local / user state (created at runtime)
 config/ui_geometry.yaml
