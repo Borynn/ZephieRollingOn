@@ -149,11 +149,11 @@ def _center(dialog: tk.Toplevel, master: tk.Misc | None = None) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 系统缩放门禁（启动时）
+# 系统缩放提示（一键测试或启动时）
 # ---------------------------------------------------------------------------
 
 # 与 config/regions.yaml 的标定基准绑定：缩放低于 100% 时画面比基准还小，
-# 归一化只能靠插值放大、匹配会退化，所以在启动时拦下。
+# 归一化只能靠插值放大、匹配会退化，所以在识图/点击前拦下。
 SCALE_WARNING_TITLE = "Zephie发现你的系统缩放低于100%！"
 SCALE_WARNING_HINT = "快去系统设置里改好，不然Zephie没法帮你 ~"
 
@@ -372,64 +372,31 @@ def show_scale_notice(master: tk.Misc) -> None:
 
 
 def refresh_scale_or_warn(
-    master: tk.Misc | None = None, *, on_log: Callable[[str], None] | None = None
+    hwnd: int,
+    tag: str,
+    master: tk.Misc | None = None,
+    *,
+    on_log: Callable[[str], None] | None = None,
 ) -> bool:
-    """开始一次「实际识图 / 点击」流程前调用：刷新缩放，不可用则提示并返回 False。
-
-    为什么每次都要刷新：画面归一化（``vision.scale_norm``）与点击坐标还原都读的是
-    缓存值，而用户可能在软件运行期间改了系统缩放。不刷新就会按**旧倍率**计算——
-    归一化压错的尺寸、点击整体偏移，且没有任何报错。
-
-    缩放低于 100% 时与启动门禁一致地拦下：那种情况归一化只能靠插值**放大**画面，
-    模板匹配会明显退化，不如请用户改回。
-
-    ``on_log`` 用于在界面上留下原因；``master`` 供提示弹窗定位（可为 ``None``，
-    此时仍会记录日志，只是不弹窗）。
-    """
-    from zephie_rolling_on.ui.system_scale import (
-        is_scale_supported,
-        system_scale_percent,
-    )
+    """开始识图/点击流程前读取目标窗口显示器缩放一次并缓存。"""
+    from zephie_rolling_on.ui.system_scale import system_scale_percent
     from zephie_rolling_on.vision.scale_norm import set_frame_scale_percent
 
-    percent = system_scale_percent()
-    if not is_scale_supported():
+    percent = system_scale_percent(hwnd)
+    if percent is None:
+        if on_log is not None:
+            on_log(f"[{tag}] 无法读取游戏窗口所在显示器的缩放，请重新绑定游戏窗口后重试。")
+        return False
+    if percent < 100:
         if on_log is not None:
             on_log(
-                f"[缩放] 检测到系统缩放 {percent}%（低于 100%），"
-                "请改回 100% 或更高后重试。"
+                f"[{tag}][缩放] 游戏窗口所在显示器缩放为 {percent}%（低于 100%），"
+                "请改为 100% 或更高后重试。"
             )
         if master is not None:
             show_scale_notice(master)
         return False
     set_frame_scale_percent(percent)
+    if on_log is not None:
+        on_log(f"[{tag}][缩放] 使用游戏窗口所在显示器缩放 {percent}%。")
     return True
-
-
-def guard_system_scale() -> bool:
-    """启动门禁：缩放**低于** 100% 时弹窗，用户确认后关闭软件。
-
-    返回 ``True`` 表示可以继续启动；``False`` 表示调用方应立即退出。
-    缩放可用时**不创建任何窗口**，并把本次缩放交给画面归一化使用。
-    """
-    from zephie_rolling_on.ui.system_scale import is_scale_supported
-
-    if is_scale_supported():
-        # 记录本次运行的缩放：截图按它压回 100% 空间（vision.scale_norm），
-        # 点击按它把 100% 空间的坐标还原成真实客户区坐标。
-        from zephie_rolling_on.vision.scale_norm import set_frame_scale_percent
-        from zephie_rolling_on.ui.system_scale import system_scale_percent
-
-        set_frame_scale_percent(system_scale_percent())
-        return True
-
-    root = tk.Tk()
-    root.withdraw()
-    try:
-        show_scale_notice(root)
-    finally:
-        try:
-            root.destroy()
-        except tk.TclError:
-            pass
-    return False

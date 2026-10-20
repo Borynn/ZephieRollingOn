@@ -1,46 +1,13 @@
-"""把非 100% 缩放的画面归一化回 100% 标定空间。
+"""根据用户选择的游戏分辨率决定是否归一化，并缓存本轮点击倍率。
 
-为什么需要
-----------
-``config/regions.yaml``、``config/click_targets.yaml`` 以及 ``assets/`` 下所有模板
-都是按 **100% 缩放下的物理像素** 标定的。系统缩放一旦大于 100%，游戏客户区在
-物理像素上被整体放大，模板尺寸与区域偏移就全部对不上，识别必然失败。
-
-原做法是启动时直接拦掉非 100% 的用户。现在改为：截到画面后先在内存里压回
-100% 尺寸，**后续流程一律不必改**——模板库不动，区域配置不动，OCR 不动，只在
-入口做一次等比缩放。这就是「以不变应万变」。
-
-用法::
-
-    frame = normalize_frame_scale(frame, scale_percent)   # scale_percent >= 100
-
-坐标系边界（重要，调用方必须知道）
-------------------------------------
-归一化之后，**凡是从画面里量出来的坐标都落在 100% 空间**：模板命中的中心
-（``ConfirmHit.center_x/center_y``、``RollKindHit.center_*``）、标定锚点、以及由
-锚点偏移出来的区域；``regions.yaml`` / ``click_targets.yaml`` 里的配置坐标同样是
-100% 空间。
-
-而 ``executor.win32_click`` 的点击接口要的是**真实客户区坐标**。还原集中在该模块
-的**三个公开入口**（点击 / 拖拽 / 移光标）里做，而不是散落各调用点；本模块只负责
-图像，不做这个还原。
-
-插值选择
---------
-缩小用 ``cv2.INTER_AREA``：它按像素区域重采样，缩小时顺带抗锯齿，能把 Windows
-强行放大产生的虚边重新收锐，最贴合原有模板。
-
-放大（缩放 < 100%）用 ``cv2.INTER_LINEAR``：``INTER_AREA`` 在放大时会退化成
-最近邻、产生块状伪影。放大不是本项目支持的路径（启动门禁会拦掉 < 100%），
-这里只为让函数对任意输入都是「正确的」，而不是静默给出错的结果。
-
-备注：曾试过统一用 ``INTER_NEAREST``，希望「不做加权平均」能保住细笔画的峰值
-亮度（供下游的「画面是否变灰」判定使用）。实测**反而更糊**，已回退——
-降采样时最近邻只是丢弃像素，视觉上比区域重采样差得多。变灰判定的阈值问题另议，
-不再以牺牲画质为代价。
+客户区截图与选择尺寸匹配时保留原图；只有与选择尺寸乘显示器缩放匹配时，
+才缩小一次。宽高各容差 5px。测试或启动入口读取一次显示器缩放，运行中
+复用首次确定的处理方式；识别坐标到物理客户区的换算在点击入口统一完成。
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
@@ -48,35 +15,138 @@ import numpy as np
 # 标定基准。所有模板与区域配置都按这个缩放下的物理像素制作。
 BASELINE_SCALE_PERCENT = 100
 
-# 本次运行实际使用的画面缩放，由启动门禁在检测后写入一次。
-#
-# 为什么用模块级缓存、而不是每次截图都去问 ``ui.system_scale``：
-#   1. 依赖方向：``system_scale`` 在 ``ui/`` 下，而调用方在 ``vision/``（截图）与
-#      ``executor/``（点击）。反向 import ``ui`` 会把层次倒过来；改由启动流程把值
-#      注入，方向就保持正向。
-#   2. 开销：``system_scale_percent()`` 每次要问 4 个 Win32 API，而截图在轮询里
-#      被反复调用。
-#   3. 语义：缩放不会在一次运行中途变化（启动门禁已处理）。
-_frame_scale_percent: int = BASELINE_SCALE_PERCENT
+# 显示器倍率由 UI 入口注入；截图流程不读取 DPI。实际图像倍率由尺寸判定。
+GAME_RESOLUTIONS = ((1920, 1080), (1600, 900), (1366, 768))
+RESOLUTION_TOLERANCE = 5
+RESOLUTION_MISMATCH = "请检查游戏分辨率设置是否与脚本界面选择的选项一致"
+
+
+@dataclass
+class CaptureScaleState:
+    """每个界面独立持有；显示器倍率与实际图像倍率分别记录。"""
+
+    resolution: tuple[int, int] | None = None
+    selection_required: bool = False
+    monitor_percent: int = 100
+    frame_percent: int = 100
+    ready: bool = False
+    click_factors: tuple[float, float] | None = None
+    input_size: tuple[int, int] | None = None
+    output_size: tuple[int, int] | None = None
+    raw_frame: object = field(default=None, repr=False, compare=False)
+    report: str = ""
+
+
+_default_state = CaptureScaleState()
+
+
+def capture_scale_state() -> CaptureScaleState:
+    from zephie_rolling_on.app.runtime_state import get_runtime
+
+    runtime = get_runtime()
+    return runtime.capture_scale if runtime is not None else _default_state
+
+
+def configure_game_resolution(resolution: tuple[int, int] | None) -> None:
+    """选项变化或开始新一轮测试时重置判定；不读取显示器 DPI。"""
+    if resolution is not None and resolution not in GAME_RESOLUTIONS:
+        raise ValueError("不支持的游戏分辨率")
+    state = capture_scale_state()
+    state.resolution = resolution
+    state.selection_required = True
+    state.frame_percent = 100
+    state.ready = False
+    state.click_factors = None
+    state.input_size = state.output_size = None
+    state.raw_frame = None
+    state.report = ""
 
 
 def set_frame_scale_percent(scale_percent: int | float | None) -> None:
-    """记录本次运行的画面缩放（由启动门禁调用一次）。
-
-    值不可用时保持基准 100，即「不做任何缩放」——猜一个错误的倍率比不缩放更糟，
-    会把整幅画面和所有点击坐标一起算偏。
-    """
-    global _frame_scale_percent
+    """缓存入口读取的显示器倍率；配置分辨率后由首次截图决定图像倍率。"""
     try:
         value = int(round(float(scale_percent)))  # type: ignore[arg-type]
     except (TypeError, ValueError):
         value = BASELINE_SCALE_PERCENT
-    _frame_scale_percent = value if value > 0 else BASELINE_SCALE_PERCENT
+    state = capture_scale_state()
+    state.monitor_percent = value if value > 0 else BASELINE_SCALE_PERCENT
+    state.frame_percent = state.monitor_percent
+    state.ready = False
+    state.click_factors = None
 
 
 def frame_scale_percent() -> int:
-    """本次运行使用的画面缩放百分比；未设置时为 100（即不做缩放）。"""
-    return _frame_scale_percent
+    """本次运行实际使用的图像倍率，可能与显示器倍率不同。"""
+    return capture_scale_state().frame_percent
+
+
+def click_scale_factors() -> tuple[float, float]:
+    state = capture_scale_state()
+    factor = state.frame_percent / 100.0
+    return state.click_factors or (factor, factor)
+
+
+def normalize_window_frame(
+    frame: np.ndarray | None,
+    client_size: tuple[int, int] | None = None,
+) -> np.ndarray | None:
+    """先匹配用户选择的尺寸，再决定本轮是否归一化；宽高分别容差 5px。"""
+    state = capture_scale_state()
+    state.raw_frame = frame
+    if frame is None or frame.size == 0:
+        return frame
+    h, w = frame.shape[:2]
+    state.input_size = (w, h)
+    if state.selection_required:
+        if state.resolution is None:
+            state.report = "请选择游戏分辨率"
+            raise ValueError(state.report)
+        rw, rh = state.resolution
+        scaled = (
+            int(round(rw * state.monitor_percent / 100.0)),
+            int(round(rh * state.monitor_percent / 100.0)),
+        )
+
+        def matches(size: tuple[int, int]) -> bool:
+            return (
+                abs(w - size[0]) <= RESOLUTION_TOLERANCE
+                and abs(h - size[1]) <= RESOLUTION_TOLERANCE
+            )
+
+        # 本轮首次判断优先保留原图。运行期间不重新选倍率，只验证尺寸仍有效。
+        if state.ready:
+            valid = matches(state.resolution if state.frame_percent == 100 else scaled)
+        elif matches(state.resolution):
+            state.frame_percent = 100
+            valid = True
+        elif matches(scaled):
+            state.frame_percent = state.monitor_percent
+            valid = True
+        else:
+            valid = False
+        if not valid:
+            state.report = (
+                f"{RESOLUTION_MISMATCH}（已选 {rw}×{rh}，截图 {w}×{h}，"
+                f"显示器缩放 {state.monitor_percent}%，缩放后应为 {scaled[0]}×{scaled[1]}，容差 ±5px）"
+            )
+            raise ValueError(state.report)
+
+    result = normalize_frame_scale(frame, state.frame_percent)
+    oh, ow = result.shape[:2]
+    state.output_size = (ow, oh)
+    if client_size is not None:
+        state.click_factors = (client_size[0] / ow, client_size[1] / oh)
+    state.ready = True
+    choice = (
+        "未指定" if state.resolution is None
+        else f"{state.resolution[0]}×{state.resolution[1]}"
+    )
+    action = "原图直接识别" if state.frame_percent == 100 else f"按 {state.frame_percent}% 归一化"
+    state.report = (
+        f"已选 {choice}，客户区截图 {w}×{h}，显示器缩放 {state.monitor_percent}%；"
+        f"{action}，识别图 {ow}×{oh}"
+    )
+    return result
 
 
 def baseline_point(x: int, y: int) -> tuple[int, int]:
@@ -85,26 +155,12 @@ def baseline_point(x: int, y: int) -> tuple[int, int]:
     与 :func:`baseline_client_size` 同一比例；区别是点不做 ``max(1, …)``——原点
     坐标 0 是合法的。
     """
-    scale = int(_frame_scale_percent)
-    if scale <= BASELINE_SCALE_PERCENT:
-        return int(x), int(y)
-    factor = BASELINE_SCALE_PERCENT / float(scale)
-    return int(round(int(x) * factor)), int(round(int(y) * factor))
+    fx, fy = click_scale_factors()
+    return int(round(int(x) / fx)), int(round(int(y) / fy))
 
 
 def baseline_client_size(width: int, height: int) -> tuple[int, int]:
-    """把**物理**客户区尺寸换算成 100% 标定空间的尺寸。
-
-    为什么需要：游戏的分辨率（例如「1366×768 时跳过动画」这类判断）是按 **100%
-    空间的逻辑分辨率** 描述的，而 ``win32_window._client_size_screen_pixels`` 返回的
-    是**物理像素**。缩放大于 100% 时两者不相等——125% 下一块 1366×768 的逻辑画面
-    会报成 1708×960——所以凡是「按分辨率决定行为」的判断都必须先换算，否则在缩放
-    下**永远不匹配**。
-
-    注意与截图归一化的区别：归一化只影响**画面**，凡是读 ``frame.shape`` 的地方
-    （模板、区域、OCR）都已经自动落在 100% 空间；而读 Win32 客户区尺寸的地方不会，
-    必须显式过这个函数。
-    """
+    """按本轮实际坐标映射，把物理客户区尺寸换算成识别图尺寸。"""
     w, h = baseline_point(width, height)
     return max(1, w), max(1, h)
 

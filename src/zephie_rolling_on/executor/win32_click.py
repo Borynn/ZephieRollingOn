@@ -109,10 +109,8 @@ def client_to_screen(capture_hwnd: int, client_x: int, client_y: int) -> tuple[i
 
 # 三个入口（点击 / 拖拽 / 移光标）都把坐标换算成**物理**客户区坐标。
 #
-# 为什么是物理：所有识图相关的坐标都在「归一化 = 100% 标定空间」里——归一化把
-# 截图按 100/系统缩放 压回了基准尺寸，所以从画面量出的坐标、regions.yaml 与
-# click_targets.yaml 里的配置都是这个空间。而真正落到游戏窗口上的坐标必须放大回
-# 物理像素。
+# 模板与区域使用识别图坐标。图像倍率由分辨率匹配决定，不直接采用显示器倍率；
+# 识别图到物理客户区的比例由截图出口保存，三个点击入口统一使用该比例。
 #
 # 实测依据：本项目的目标游戏（LaTale）是 ``DPI_AWARENESS_UNAWARE``，Windows 会给它
 # 一个虚拟化过的逻辑客户区（150% 时逻辑 1600x900 / 物理 2400x1350）。但游戏实际是
@@ -125,17 +123,11 @@ def client_to_screen(capture_hwnd: int, client_x: int, client_y: int) -> tuple[i
 # 注：这不是「Windows 会缩放 PostMessage 参数」（消息参数只是数字，系统不会碰），
 # 而是目标窗口自己按哪套坐标系解释。
 def _to_physical_space(client_x: int, client_y: int) -> tuple[int, int]:
-    """把 100% 标定空间（归一化后）的客户区坐标换算成**物理**客户区坐标。"""
-    from zephie_rolling_on.vision.scale_norm import (
-        BASELINE_SCALE_PERCENT,
-        frame_scale_percent,
-    )
+    """使用本轮截图确定的倍率；点击投递方式保持原有逻辑。"""
+    from zephie_rolling_on.vision.scale_norm import click_scale_factors
 
-    scale = int(frame_scale_percent())
-    if scale <= BASELINE_SCALE_PERCENT:
-        return int(client_x), int(client_y)
-    factor = scale / float(BASELINE_SCALE_PERCENT)
-    return int(round(int(client_x) * factor)), int(round(int(client_y) * factor))
+    fx, fy = click_scale_factors()
+    return int(round(int(client_x) * fx)), int(round(int(client_y) * fy))
 
 
 def _screen_to_absolute(sx: int, sy: int) -> tuple[int, int]:

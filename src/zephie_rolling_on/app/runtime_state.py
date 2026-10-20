@@ -11,6 +11,7 @@ from zephie_rolling_on.models.lucky_deck import (
     PlannerCalibration,
     _load_planner_calibration_disk,
 )
+from zephie_rolling_on.vision.scale_norm import CaptureScaleState
 
 
 @dataclass
@@ -18,6 +19,7 @@ class RuntimeState:
     """In-process mutable state for one UI instance."""
 
     calibration: PlannerCalibration = field(default_factory=PlannerCalibration)
+    capture_scale: CaptureScaleState = field(default_factory=CaptureScaleState)
     # 大冒险框客户区锚点（多开时各界面独立，不抢写 adventure_frame.yaml）
     adventure_anchor: tuple[int, int] = (462, 152)
     # 绑定窗口（多开时各界面独立，不抢写 game_window.yaml）
@@ -126,7 +128,10 @@ class RuntimeState:
 
     def clone(self) -> RuntimeState:
         """测试用：独立副本。"""
+        from dataclasses import replace
+
         return RuntimeState(
+            capture_scale=replace(self.capture_scale, raw_frame=None),
             calibration=PlannerCalibration(
                 dice_remaining=int(self.calibration.dice_remaining),
                 drawn_counts=dict(self.calibration.drawn_counts),

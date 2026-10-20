@@ -166,8 +166,7 @@ def _window_rect_for_capture(hwnd: int) -> tuple[int, int, int, int]:
 
 
 def _crop_frame_to_client(image: np.ndarray, hwnd: int) -> np.ndarray:
-    """WGC 有时含窗口边框/阴影，按客户区裁切以对齐 regions.yaml。"""
-    import cv2
+    """按比例映射并裁出客户区，保留 WGC 像素；归一化在截图公共出口判定。"""
     import win32gui
 
     from zephie_rolling_on.vision.win32_window import _client_size_screen_pixels
@@ -185,10 +184,7 @@ def _crop_frame_to_client(image: np.ndarray, hwnd: int) -> np.ndarray:
     try:
         wl, wt, wr, wb = _window_rect_for_capture(hwnd)
     except win32gui.error:
-        out = image[:ch, :cw] if h >= ch and w >= cw else image
-        if out.shape[0] != ch or out.shape[1] != cw:
-            return cv2.resize(out, (cw, ch), interpolation=cv2.INTER_AREA)
-        return out
+        return image[:ch, :cw] if h >= ch and w >= cw else image
 
     win_w = max(1, wr - wl)
     win_h = max(1, wb - wt)
@@ -205,9 +201,6 @@ def _crop_frame_to_client(image: np.ndarray, hwnd: int) -> np.ndarray:
     cropped = image[y1:y2, x1:x2]
     if cropped.size == 0:
         return image
-    # 像素坐标必须与客户区物理尺寸一致，否则模板匹配的 x/y 会整段平移
-    if cropped.shape[0] != ch or cropped.shape[1] != cw:
-        cropped = cv2.resize(cropped, (cw, ch), interpolation=cv2.INTER_AREA)
     return cropped
 
 

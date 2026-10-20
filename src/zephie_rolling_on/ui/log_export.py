@@ -6,6 +6,7 @@
   自检报告.txt     导出时现场跑一遍环境自检
   环境信息.txt     版本、是否打包运行、Python 版本、程序目录、编码等
   截图.png         自检时真实截到的那一帧（用户当时看到的画面）
+  截图-原始客户区.png  归一化前的客户区原图，分辨率不匹配时也保留
   截图-区域标注.png  同一帧，叠加 regions.yaml 各检测区域框与大冒险框
   配置/…           用户配置快照（排查需要）
 
@@ -212,13 +213,18 @@ def _capture_images() -> list[tuple[str, bytes]]:
     依赖 ``self_check_report()`` 已经跑过（是它触发的真实截屏）。取不到就返回空，
     不影响其余材料的导出。
     """
-    from zephie_rolling_on.diagnose import last_captured_frame
-
-    frame = last_captured_frame()
-    if frame is None or getattr(frame, "size", 0) == 0:
-        return []
+    from zephie_rolling_on.diagnose import last_captured_frame, last_raw_captured_frame
 
     out: list[tuple[str, bytes]] = []
+    original = last_raw_captured_frame()
+    if original is not None and getattr(original, "size", 0) > 0:
+        original_png = _encode_png(original)
+        if original_png is not None:
+            out.append(("截图-原始客户区.png", original_png))
+    frame = last_captured_frame()
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return out
+
     raw = _encode_png(frame)
     if raw is not None:
         out.append((SHOT_NAME, raw))
@@ -324,6 +330,7 @@ class LogExportDialog:
         bound_window: tuple[int, str] | None = None,
         on_log=None,
         on_closed=None,
+        runtime=None,
     ) -> None:
         import queue
         import threading
@@ -342,6 +349,7 @@ class LogExportDialog:
         self._on_closed = on_closed or (lambda: None)
         self._master = master
         self._bound_window = bound_window
+        self._runtime = runtime
         self._result: Path | None = None
         self._error = ""
         self._closed = False
@@ -591,7 +599,11 @@ class LogExportDialog:
         self, log_text: str, bound_window: tuple[int, str] | None = None
     ) -> None:
         try:
-            path = export_bundle(log_text, bound_window=bound_window)
+            from contextlib import nullcontext
+            from zephie_rolling_on.app.runtime_state import use_runtime
+
+            with use_runtime(self._runtime) if self._runtime is not None else nullcontext():
+                path = export_bundle(log_text, bound_window=bound_window)
             self._queue.put(("ok", path))
         except Exception as exc:  # noqa: BLE001
             self._queue.put(("error", f"{type(exc).__name__}: {exc}"))

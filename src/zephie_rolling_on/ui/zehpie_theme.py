@@ -486,11 +486,14 @@ class ZephieSelect(tk.Frame):
         font: tuple | None = None,
         width: int = 168,
         height: int = 30,
+        placeholder: str = "",
+        responsive: bool = False,
         **kwargs: Any,
     ) -> None:
         parent_bg = bg or parent.cget("bg")
         super().__init__(parent, bg=parent_bg, highlightthickness=0, **kwargs)
         self._values = list(values)
+        self._placeholder = placeholder
         self.var = (
             variable
             if variable is not None
@@ -504,6 +507,15 @@ class ZephieSelect(tk.Frame):
         self._font = font or cute_font(9, bold=False)
         self._width = int(width)
         self._height = int(height)
+        if responsive:
+            from tkinter import font as tkfont
+
+            measured_font = tkfont.Font(master=self, font=self._font)
+            labels = [placeholder, *[label for label, _value in values]]
+            self._width = max(
+                self._width, max(measured_font.measure(label) for label in labels) + 34
+            )
+            self._height = max(self._height, measured_font.metrics("linespace") + 12)
 
         self._lbl = tk.Label(
             self,
@@ -525,6 +537,11 @@ class ZephieSelect(tk.Frame):
         )
         # 紧贴文本之后（不用 expand 撑开，否则会被推到最右侧）
         self._cv.pack(side="left", padx=(8, 0))
+        if responsive:
+            self._preferred_width = self._width
+            self._stacked: bool | None = None
+            self.bind("<Configure>", self._fit_row)
+            self._cv.bind("<Configure>", self._fit_canvas)
         # 文案与下拉框**都要**能点：只把下拉框做成热区时，用户很自然会去点文字，
         # 那时候毫无反应，看起来就像「点不动」。
         for widget in (self._lbl, self._cv):
@@ -536,6 +553,25 @@ class ZephieSelect(tk.Frame):
             self.var.trace_add("write", lambda *_a: self._draw())
         except tk.TclError:
             self.var.trace("w", lambda *_a: self._draw())
+        self._draw()
+
+    def _fit_row(self, event: tk.Event) -> None:
+        stacked = event.width < self._lbl.winfo_reqwidth() + 8 + self._preferred_width
+        if stacked == self._stacked:
+            return
+        self._stacked = stacked
+        self._lbl.pack_configure(
+            side="top" if stacked else "left", anchor="w", pady=(0, 4) if stacked else 0
+        )
+        self._cv.pack_configure(
+            side="top" if stacked else "left",
+            padx=0 if stacked else (8, 0),
+            fill="x",
+            expand=True,
+        )
+
+    def _fit_canvas(self, event: tk.Event) -> None:
+        self._width = event.width
         self._draw()
 
     # -- 取值 --
@@ -557,7 +593,7 @@ class ZephieSelect(tk.Frame):
         for label, value in self._values:
             if value == cur:
                 return label
-        return self._values[0][0] if self._values else ""
+        return self._placeholder or (self._values[0][0] if self._values else "")
 
     # -- 绘制 --
 

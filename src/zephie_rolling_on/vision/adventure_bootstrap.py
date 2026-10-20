@@ -74,16 +74,15 @@ def apply_resolution_skip_animation_block(
     只影响本次运行，不改动用户的勾选状态。
     """
     from zephie_rolling_on.vision.win32_window import _client_size_screen_pixels
-    from zephie_rolling_on.vision.scale_norm import baseline_client_size
+    from zephie_rolling_on.vision.scale_norm import baseline_client_size, capture_scale_state
 
     log = on_log or (lambda _m: None)
     try:
         _x, _y, w, h = _client_size_screen_pixels(int(hwnd))
     except Exception:  # noqa: BLE001
         return ""
-    # BLOCKED_SKIP_ANIMATION_SIZE 是 100% 空间的逻辑分辨率，而上面拿到的是物理像素；
-    # 缩放 >100% 时不换算就永远匹配不上（125% 下 1366×768 会报成 1708×960）。
-    w, h = baseline_client_size(w, h)
+    # UI 已明确选择实际游戏分辨率；无 UI 的旧调用则按截图坐标映射换算。
+    w, h = capture_scale_state().resolution or baseline_client_size(w, h)
     notice = resolution_skip_animation_notice(w, h)
     set_skip_animation_resolution_block(bool(notice))
     if notice:

@@ -44,7 +44,10 @@ from zephie_rolling_on.ui.hotkey_config import (
 from zephie_rolling_on.ui.hotkey_listener import GlobalHotkeyManager
 from zephie_rolling_on.ui.hotkey_settings import open_hotkey_settings
 from zephie_rolling_on.ui.model_picker import open_model_picker
-from zephie_rolling_on.ui.notice_dialog import guard_system_scale, show_blocking_notice
+from zephie_rolling_on.ui.notice_dialog import (
+    show_blocking_notice,
+    show_scale_notice,
+)
 from zephie_rolling_on.ui.ui_geometry import apply_saved_geometry, remember_window_geometry
 from zephie_rolling_on.ui.zehpie_theme import (
     RoundedButton,
@@ -226,6 +229,10 @@ class ControlPanel:
         self._pending_lucky_text: str | None = None
         self._status_flush_after_id: str | None = None
         self._runtime = RuntimeState.bootstrap_from_disk()
+        from zephie_rolling_on.vision.scale_norm import configure_game_resolution
+
+        with use_runtime(self._runtime):
+            configure_game_resolution(None)
         self._session = ScriptSession(
             runtime=self._runtime,
             on_log=self._enqueue_log,
@@ -445,6 +452,25 @@ class ControlPanel:
         hero_right.pack(side="right", padx=(6, 0))
         # 原 Zephie 绑定图标：拖到游戏窗松手
         self._picker.mount(hero_right, bg=card)
+
+        from zephie_rolling_on.vision.scale_norm import GAME_RESOLUTIONS
+
+        self._game_resolution_var = tk.StringVar(value="")
+        self._sel_game_resolution = ZephieSelect(
+            st,
+            "游戏分辨率: ",
+            values=[(f"{w}*{h}", f"{w}*{h}") for w, h in GAME_RESOLUTIONS],
+            variable=self._game_resolution_var,
+            placeholder="请选择游戏分辨率",
+            command=self._on_game_resolution_changed,
+            bg=card,
+            fg=muted,
+            font=font_ui,
+            width=180,
+            height=30,
+            responsive=True,
+        )
+        self._sel_game_resolution.pack(fill="x", pady=(6, 2))
 
         divider = tk.Canvas(st, height=6, bg=card, highlightthickness=0)
         divider.pack(fill="x", pady=(4, 6))
@@ -907,6 +933,15 @@ class ControlPanel:
         log_success: bool = True,
         persist_disk: bool = False,
     ) -> None:
+        if (
+            self._session.is_running()
+            or self._session.is_stopping()
+            or self._auto_start_preparing
+            or self._recognition_test_busy
+            or self._exporting_logs
+        ):
+            self._append_log("请先等待当前操作结束或停止脚本，再重新绑定游戏窗口。")
+            return
         # 尺寸阈值按 100% 空间比对（与 pick_window_at_point 一致）；日志仍报物理尺寸
         from zephie_rolling_on.vision.scale_norm import baseline_client_size
 
@@ -919,6 +954,10 @@ class ControlPanel:
             return
         prev_hwnd = self._bound.capture_hwnd if self._bound else None
         self._bound = info
+        from zephie_rolling_on.vision.scale_norm import configure_game_resolution
+
+        with use_runtime(self._runtime):
+            configure_game_resolution(self._selected_game_resolution())
         from zephie_rolling_on.vision.capture_wgc import (
             release_wgc_session,
             reset_session_create_attempts,
@@ -1099,6 +1138,29 @@ class ControlPanel:
             self._btn_export_log.config(
                 state="disabled" if export_busy else "normal"
             )
+        if hasattr(self, "_sel_game_resolution"):
+            self._sel_game_resolution.config(state="disabled" if export_busy else "normal")
+
+    def _selected_game_resolution(self) -> tuple[int, int] | None:
+        from zephie_rolling_on.vision.scale_norm import GAME_RESOLUTIONS
+
+        selected = self._game_resolution_var.get()
+        return next(
+            (size for size in GAME_RESOLUTIONS if selected == f"{size[0]}*{size[1]}"),
+            None,
+        )
+
+    def _on_game_resolution_changed(self) -> None:
+        from zephie_rolling_on.vision.scale_norm import configure_game_resolution
+
+        resolution = self._selected_game_resolution()
+        with use_runtime(self._runtime):
+            configure_game_resolution(resolution)
+        if resolution is not None:
+            self._append_log(
+                f"[游戏分辨率] 已选择 {resolution[0]}*{resolution[1]}，"
+                "下次测试或启动时检查截图尺寸。"
+            )
 
     def _export_logs(self) -> None:
         """把日志、环境自检报告、环境信息和配置快照打成一个 zip 放到程序目录。
@@ -1141,21 +1203,27 @@ class ControlPanel:
             ) if self._bound else None,
             on_log=self._append_log,
             on_closed=self._on_log_export_closed,
+            runtime=self._runtime,
         )
 
     def _on_log_export_closed(self) -> None:
         self._exporting_logs = False
         self._sync_recognition_test_buttons()
 
-    def _refresh_scale_or_block(self, tag: str) -> bool:
-        """开始一次实际识图/点击前刷新系统缩放；不可用则记日志、弹窗并返回 False。
-
-        缩放可能在软件运行期间被改动（改完系统设置再回来操作），而画面归一化与
-        点击坐标还原读的都是缓存值——不刷新就会按旧倍率计算，点击整体偏移且不报错。
-        """
+    def _refresh_scale_or_block(self, hwnd: int, tag: str) -> bool:
+        """在一键测试或启动入口读取一次游戏窗口所在显示器缩放并缓存。"""
         from zephie_rolling_on.ui.notice_dialog import refresh_scale_or_warn
+        from zephie_rolling_on.vision.scale_norm import configure_game_resolution
 
-        return refresh_scale_or_warn(self.root, on_log=self._append_log)
+        resolution = self._selected_game_resolution()
+        if resolution is None:
+            self._append_log("请选择游戏分辨率")
+            return False
+        with use_runtime(self._runtime):
+            if not refresh_scale_or_warn(hwnd, tag, self.root, on_log=self._append_log):
+                return False
+            configure_game_resolution(resolution)
+        return True
 
     def _test_all_recognition(self) -> None:
         """整条识别流程：标定 → 卡池 → 骰子/格子/幸运卡。
@@ -1166,11 +1234,11 @@ class ControlPanel:
         if self._recognition_test_busy:
             self._append_log("识别测试进行中，请稍候…")
             return
-        if not self._refresh_scale_or_block("一键测试"):
-            return
         hwnd = self._resolved_hwnd()
         if not hwnd:
             self._append_log("请先绑定游戏窗口。")
+            return
+        if not self._refresh_scale_or_block(hwnd, "一键测试"):
             return
         tag = "一键测试"
         save_debug = _dev_one_click_test_save_debug()
@@ -1228,9 +1296,18 @@ class ControlPanel:
     ) -> None:
         """在工作线程内执行；失败原因通过 ``_finish_recognition_test_error`` 上报。"""
         # ---- 1) 分辨率检查 + 标定（1366×768 时跳过开关检测，其余分辨率照常）----
-        self._save_test_step_frame(
-            save_debug, "step1_calib_in", capture_window_client(int(hwnd)), log
-        )
+        frame = capture_window_client(int(hwnd))
+        from zephie_rolling_on.vision.capture import last_capture_failure_note
+        from zephie_rolling_on.vision.scale_norm import capture_scale_state
+
+        if frame is None:
+            self.root.after(
+                0,
+                lambda m=last_capture_failure_note(): self._finish_recognition_test_error(m),
+            )
+            return
+        log(f"[分辨率检查] {capture_scale_state().report}")
+        self._save_test_step_frame(save_debug, "step1_calib_in", frame, log)
         boot = run_adventure_bootstrap(
             int(hwnd), on_log=None, skip_toggle_when_blocked=True
         )
@@ -2101,20 +2178,20 @@ class ControlPanel:
         self._sync_recognition_test_buttons()
 
     def _auto_click_start(self) -> None:
+        if self._exporting_logs or self._recognition_test_busy or self._session.is_stopping():
+            self._append_log("请先等待当前测试、导出或停止操作结束，再启动脚本。")
+            return
         if self._auto_start_preparing:
             self._append_log("启动准备中（标定/补充骰子/卡池），请稍候…")
             return
         if self._session.is_running():
             self._append_log("自动点击已在运行。")
             return
-        # 系统缩放可能在软件运行期间被改动（改完设置再回来点「启动」）。画面归一化
-        # 与点击坐标还原都依赖这个缓存，不重取就会按旧倍率计算、点击整体偏移，
-        # 所以每次启动都重新读一次；低于 100% 时与启动门禁一致地拦下。
-        if not self._refresh_scale_or_block("启动"):
-            return
         hwnd = self._resolved_hwnd()
         if not hwnd:
             self._append_log("请先绑定游戏窗口。")
+            return
+        if not self._refresh_scale_or_block(hwnd, "启动"):
             return
         if not self._map_path.is_file():
             self._append_log(f"找不到地图: {self._map_path}")
@@ -2144,6 +2221,9 @@ class ControlPanel:
                     boot = run_adventure_bootstrap(
                         int(hwnd), on_log=None, skip_toggle_when_blocked=True
                     )
+                    from zephie_rolling_on.vision.scale_norm import capture_scale_state
+
+                    self._enqueue_log(f"[分辨率检查] {capture_scale_state().report}")
                     calib_ok = bool(boot.ok)
                     calib_msg = boot.message
                     toggle_ok = bool(boot.toggle_ok)
@@ -2397,8 +2477,19 @@ class ControlPanel:
 def run_app() -> None:
     # 任务栏独立实体：必须在建任何窗口之前设，否则已建窗口会带着旧 ID 进任务栏
     set_app_user_model_id()
-    # 识图依赖逻辑坐标 == 物理像素：系统缩放不是 100% 时先拦下并提示，
-    # 用户点「确认」后直接关闭软件，不进入主界面。
-    if not guard_system_scale():
-        return
-    ControlPanel().run()
+    panel = ControlPanel()
+    hwnd = panel._resolved_hwnd()
+    if hwnd:
+        from zephie_rolling_on.ui.system_scale import system_scale_percent
+
+        percent = system_scale_percent(hwnd)
+        if percent is not None and percent < 100:
+            show_scale_notice(panel.root)
+            panel._on_close()
+            return
+        if percent is None:
+            panel._append_log(
+                "[启动][缩放] 无法读取游戏窗口所在显示器缩放；"
+                "启动/一键测试前会再次检查。"
+            )
+    panel.run()

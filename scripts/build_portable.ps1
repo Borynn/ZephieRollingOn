@@ -9,7 +9,10 @@ param(
     # Optional: model_host.exe to bundle. It is a separate runtime component and
     # is not part of this repository.
     [string]$ModelHostExe = "",
-    [string]$BuildTag = ""
+    [string]$BuildTag = "",
+    # The normal release build runs regression tests; tester builds may skip them
+    # while retaining the source and packaging gates below.
+    [switch]$SkipTests
 )
 
 $ErrorActionPreference = "Stop"
@@ -120,8 +123,12 @@ Invoke-Gate "audit_independence.py" -PartialMarker "INDEPENDENCE_SKIPPED"
 
 & python -c "import onnxruntime as o; assert 'DmlExecutionProvider' in o.get_available_providers(), 'Install onnxruntime-directml (remove CPU-only onnxruntime first)'; print('ONNX Runtime',o.__version__,o.get_available_providers())"
 if ($LASTEXITCODE -ne 0) { throw "DirectML runtime is required for the Windows portable build" }
-& python -m unittest discover -s tests -p test_embedded_vpk.py
-if ($LASTEXITCODE -ne 0) { throw "Embedded VPK contract tests failed" }
+if (-not $SkipTests) {
+    & python -m unittest discover -s tests
+    if ($LASTEXITCODE -ne 0) { throw "Release regression tests failed" }
+} else {
+    Write-Warning "Skipping regression tests for this tester build"
+}
 
 # Avoid host conda base Tcl leaking into the frozen app search path.
 $env:TCL_LIBRARY = $null

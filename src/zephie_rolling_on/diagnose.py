@@ -29,11 +29,17 @@ FAIL = "FAIL"
 # 「实际截屏测试」真正截到的那一帧，仅内存持有；供「导出日志」随包附上。
 # 未绑定窗口或截屏失败时保持 None。取用方应自行 copy()，不要就地改写。
 _last_captured_frame: Any = None
+_last_raw_captured_frame: Any = None
 
 
 def last_captured_frame() -> Any:
     """最近一次自检实际截到的画面（numpy BGR 数组）；没有则 None。"""
     return _last_captured_frame
+
+
+def last_raw_captured_frame() -> Any:
+    """最近一次自检裁出的原始客户区图像，未归一化。"""
+    return _last_raw_captured_frame
 
 # Windows 10 起始内部版本号；WGC（Windows.Graphics.Capture）自 1803 起提供。
 WIN10_RTM_BUILD = 10240
@@ -322,8 +328,9 @@ def _bound_game_window() -> tuple[int, str] | None:
 
 def check_capture(bound_window: tuple[int, str] | None = None) -> list[Check]:
     # 本轮失败时不能让打包逻辑误用之前某次自检留下的画面。
-    global _last_captured_frame
+    global _last_captured_frame, _last_raw_captured_frame
     _last_captured_frame = None
+    _last_raw_captured_frame = None
     out: list[Check] = []
     try:
         from zephie_rolling_on.vision.capture import (
@@ -416,6 +423,12 @@ def check_capture(bound_window: tuple[int, str] | None = None) -> list[Check]:
         from zephie_rolling_on.vision.capture_wgc import last_capture_method
 
         frame = capture_window_client(hwnd)
+        from zephie_rolling_on.vision.scale_norm import capture_scale_state
+
+        state = capture_scale_state()
+        _last_raw_captured_frame = state.raw_frame
+        if state.report:
+            out.append(Check(OK if frame is not None else WARN, "游戏分辨率检查", state.report))
         if frame is not None and getattr(frame, "size", 0) > 0:
             h, w = frame.shape[:2]
             # 留住这一帧：导出日志会把它连同区域标注一起打进 zip —— 用户反馈

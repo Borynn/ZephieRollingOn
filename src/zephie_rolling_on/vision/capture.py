@@ -558,18 +558,33 @@ def _occlusion_note_with_detail(hwnd: int, *, wgc_ok: bool = False) -> str:
 
 
 def capture_window_client(hwnd: int) -> Optional[np.ndarray]:
-    """截取游戏窗口客户区（BGR），**返回前统一归一化回 100% 标定空间**。
+    """截取游戏客户区（BGR），按用户选择的分辨率决定是否归一化。
 
     WGC 可用时优先用它；否则退回桌面裁切。窗口被遮挡时桌面裁切会截到上层
     窗口，因此先判定遮挡并直接返回 ``None``（``capture_block_reason()`` 会是
     ``"occluded"``），由调用方提示用户。
 
-    为什么拆成「外层归一化 + 内层原实现」：本函数有**多条**返回路径（WGC /
-    桌面裁切 / 各自的失败分支），逐条包 ``_normalize_to_baseline`` 会漏——实测就
-    漏掉过 ``return wgc_img``，而 WGC 恰是主路径，导致整轮缩放适配在主路径上
-    失效。放在唯一出口，则由**结构**保证不可能漏。
+    WGC 和桌面裁切共用唯一处理出口。先检验原始客户区图像尺寸，再按需
+    归一化一次；分辨率不匹配时返回 None，并记录用户可操作的失败提示。
     """
-    return _normalize_to_baseline(_capture_window_client_raw(hwnd))
+    from zephie_rolling_on.vision.scale_norm import (
+        capture_scale_state,
+        normalize_window_frame,
+    )
+    from zephie_rolling_on.vision.win32_window import _client_size_screen_pixels
+
+    state = capture_scale_state()
+    state.raw_frame = None
+    state.report = ""
+    raw = _capture_window_client_raw(hwnd)
+    if raw is None:
+        return None
+    _x, _y, cw, ch = _client_size_screen_pixels(hwnd)
+    try:
+        return normalize_window_frame(raw, (cw, ch))
+    except ValueError as exc:
+        _report_failure(str(exc), block_reason="resolution")
+        return None
 
 
 def _capture_window_client_raw(hwnd: int) -> Optional[np.ndarray]:
