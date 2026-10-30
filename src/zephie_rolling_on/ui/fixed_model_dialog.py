@@ -4,6 +4,7 @@ from __future__ import annotations
 import tkinter as tk
 
 from zephie_rolling_on.ui.ui_geometry import ensure_master_visible, should_set_transient
+from zephie_rolling_on.ui.modal_owner import attach_modal_owner
 
 
 class FixedModelDialog(tk.Toplevel):
@@ -19,6 +20,7 @@ class FixedModelDialog(tk.Toplevel):
         self.overrideredirect(True)
         self.resizable(False, False)
         self._owner_binding = self._owner.bind('<Configure>', self._owner_changed, add='+')
+        attach_modal_owner(self, self._owner)
         self.bind('<Configure>', self._dialog_changed, add='+')
         self.bind('<Destroy>', self._cleanup_centering, add='+')
 
@@ -32,7 +34,7 @@ class FixedModelDialog(tk.Toplevel):
 
     def _schedule_center(self):
         if self._center_job is None and self.winfo_exists():
-            self._center_job = self.after_idle(self._place_centered)
+            self._center_job = self.after(16, self._place_centered)
 
     def _place_centered(self):
         self._center_job = None

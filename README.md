@@ -36,7 +36,8 @@ python -m zephie_rolling_on.ui
 模型放在 `decision_models/`，界面点「选择决策模型」导入。接口见
 [docs/MODEL_PACKAGE_CONTRACT.md](docs/MODEL_PACKAGE_CONTRACT.md)。
 
-仓库与正式 Release 内置 `m1_points`、`VELA v4.2` 和 `LYRA v1`。
+后续便携包内置 `full_points`、`VELA v4.2` 和 `LYRA v1`，不再内置 `m1_points`。
+仓库另提供 `LYRA v2`，不随便携包内置；已有的 `m1_points` 仍保留。
 其他兼容模型也可放入此目录使用。
 
 两种包格式按扩展名分派，界面统一展示：
@@ -66,14 +67,10 @@ CC BY-NC-SA 4.0 发布；授权记录见
 | `vela_v4.1.vpk` | COMPACT48，约 38 MB | CPU，搜索窗口 48 | 约 1876 格 |
 | `vela_v4.2.vpk` | COMPACT100 Hinge，约 87 MB | CPU，搜索窗口 100 | 约 1877 格 |
 | `lyra_v1.vpk` | FP32，约 25 MB | GPU 优先，失败回退 CPU | 约 1879 格 |
+| `lyra_v2.vpk` | FP32，约 65 MB | GPU 优先，失败回退 CPU | 上游研究参考约 1880 格 |
 
-**LYRA v1 运行说明：**
-
-- 默认优先 DirectML GPU，初始化或推理失败后自动切换 CPU；实际设备显示在导入状态及建议中。
-- 支持兼容 DirectML 的 AMD、Intel、NVIDIA 显卡，不需要另装 CUDA。
-- 参考决策耗时：GPU **28 ms**、CPU **45 ms**（Ryzen 7 7800X3D / Radeon RX 7900 XT，
-  决策中位数）；实际耗时随设备与局面变化。
-- 首次使用 LYRA 请更新到支持包内引擎的新版软件；原有 VELA 模型仍可继续使用。
+LYRA v2 已提供于仓库的 `decision_models/`，便携包用户需单独下载模型文件放入该目录。
+v2 的参考终格来自上游研究，并非本地大规模评测结果；实际表现随局面而变化。
 
 只导入可信来源的 VPK：包内引擎会执行本地代码。
 开发与打包说明见 [包内引擎文档](docs/EMBEDDED_VPK.md)。

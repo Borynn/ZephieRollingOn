@@ -524,7 +524,7 @@ class ControlPanel:
             height=26,
             width=96,
             radius=8,
-            font=("Microsoft YaHei UI", 8),
+            font=_UI["font_small"],
         )
 
         # 幸运卡单独占一行（卡池信息与按钮下方），长文本自动换行，不挤占上方内容
@@ -564,7 +564,7 @@ class ControlPanel:
                 anchor="w",
                 bg=card,
                 fg=_UI["accent_dark"],
-                font=("Consolas", 10, "bold"),
+                font=_UI["font_btn"],
             )
             self._lbl_cursor_frame.pack(fill="x")
 
@@ -1804,6 +1804,7 @@ class ControlPanel:
         name = (info.name or label or "模型").strip()
         self._append_log(f"[决策模型] {name}已就绪")
         self._set_status_note(f"已选择决策模型：{label}")
+        self._sync_auto_click_buttons()
 
     def _toggle_advice_loop(self) -> None:
         if self._advice_loop_active:
@@ -2153,7 +2154,7 @@ class ControlPanel:
         running = self._session.is_running()
         stopping = self._session.is_stopping()
         preparing = self._auto_start_preparing
-        spin_state = "disabled" if (running or preparing) else "normal"
+        spin_state = "disabled" if (running or stopping or preparing) else "normal"
         self._spn_rounds.config(state=spin_state)
         if hasattr(self, "_sel_skip_exclamation"):
             self._sel_skip_exclamation.config(state=spin_state)
@@ -2441,6 +2442,10 @@ class ControlPanel:
     def _on_main_configure(self, event: tk.Event) -> None:
         if event.widget is not self.root:
             return
+        geometry = (event.width, event.height, event.x, event.y)
+        if getattr(self, "_last_main_geometry", None) == geometry:
+            return
+        self._last_main_geometry = geometry
         if self._geo_save_after is not None:
             try:
                 self.root.after_cancel(self._geo_save_after)

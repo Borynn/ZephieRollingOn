@@ -13,11 +13,13 @@ Zephie Rolling On - 使用说明
    运行期间不要移动游戏窗口或更改游戏分辨率、显示器缩放。
 
 模型包说明：
-- 本便携包内置 m1_points、VELA v4.2、LYRA v1。
+- 本便携包内置 full_points、VELA v4.2、LYRA v1，不再内置 m1_points。
 - 模型放入 decision_models 目录后界面会自动发现。
 - 不要修改文件名：包与文件名绑定，改名会导致无法使用。
 - LYRA v1 默认优先使用 GPU（DirectML），失败后自动回退 CPU。
   实际设备显示在导入状态和决策建议中；核显/独显都需兼容的系统和显卡驱动。
+- LYRA v2 同样优先使用 DirectML GPU，失败后回退 CPU；仓库提供单独模型文件，
+  不随便携包内置，下载后放入 decision_models 目录即可导入。
   旧 VELA 模型继续使用。只导入可信来源的包，包内引擎会执行本地代码。
 
 自检 / 反馈问题：

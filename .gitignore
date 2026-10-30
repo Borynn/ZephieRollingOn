@@ -28,9 +28,11 @@ venv/
 decision_models/*.vpk
 !decision_models/vela_v4.2.vpk
 !decision_models/lyra_v1.vpk
+!decision_models/lyra_v2.vpk
 
 decision_models/*.zm
 !decision_models/zephie_m1_points.zm
+!decision_models/zephie_full_points.zm
 
 # Local / user state (created at runtime)
 config/ui_geometry.yaml

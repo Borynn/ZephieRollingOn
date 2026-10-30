@@ -13,6 +13,7 @@ from collections.abc import Callable
 from PIL import Image, ImageTk
 
 from zephie_rolling_on.paths import project_root
+from zephie_rolling_on.ui.modal_owner import attach_modal_owner
 from zephie_rolling_on.ui.zehpie_theme import (
     COLORS as _UI,
     RoundedButton,
@@ -38,6 +39,7 @@ def show_blocking_notice(master: tk.Misc, title: str, message: str) -> None:
     restored = ensure_master_visible(master)
 
     dialog = tk.Toplevel(master)
+    attach_modal_owner(dialog, master)
     dialog.title(title)
     dialog.configure(bg=_UI["bg"])
     dialog.resizable(False, False)
@@ -116,12 +118,10 @@ def show_blocking_notice(master: tk.Misc, title: str, message: str) -> None:
         dialog.grab_set()
     except tk.TclError:
         pass
-    # 保持在最前，避免被游戏窗口盖住而看起来"没有反应"
+    # 由所属关系维持主窗之上的层级，激活时无需全局置顶。
     try:
-        dialog.attributes("-topmost", True)
         dialog.lift()
         dialog.focus_force()
-        dialog.after(200, lambda: dialog.attributes("-topmost", False))
     except tk.TclError:
         pass
 
@@ -255,6 +255,7 @@ def show_scale_notice(master: tk.Misc) -> None:
     点「确认」后返回，由调用方关闭软件。
     """
     dialog = tk.Toplevel(master)
+    attach_modal_owner(dialog, master)
     dialog.title("Zephie Rolling On!")
     dialog.configure(bg=_UI["bg"])
     dialog.resizable(False, False)
@@ -357,12 +358,10 @@ def show_scale_notice(master: tk.Misc) -> None:
         dialog.grab_set()
     except tk.TclError:
         pass
-    # 保持在最前，避免启动瞬间被其它窗口盖住而看起来"没反应"
+    # 隐藏 root 的启动提示仍可独立显示；可见主窗则使用原生所属关系。
     try:
-        dialog.attributes("-topmost", True)
         dialog.lift()
         dialog.focus_force()
-        dialog.after(200, lambda: dialog.attributes("-topmost", False))
     except tk.TclError:
         pass
 

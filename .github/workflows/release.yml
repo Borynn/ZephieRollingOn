@@ -128,14 +128,15 @@ jobs:
             "docs/USER_README_ZH.txt",
             "decision_models/vela_v4.2.vpk",
             "decision_models/lyra_v1.vpk",
-            "decision_models/zephie_m1_points.zm",
+            "decision_models/zephie_full_points.zm",
+            "decision_models/lyra_v2.vpk",
             # 「不跳过白金锤子」模式依赖它；缺失时运行时只会静默退化成跳过所有奖励
             "assets/ui/platinum_hammer.png"
           )
           $missing = $required | Where-Object { -not (Test-Path $_) }
           if ($missing) { throw "missing required files: $($missing -join ', ')" }
           Write-Host "all $($required.Count) required components present"
-          $allowedModels = @("decision_models/vela_v4.2.vpk", "decision_models/zephie_m1_points.zm", "decision_models/lyra_v1.vpk")
+          $allowedModels = @("decision_models/vela_v4.2.vpk", "decision_models/zephie_m1_points.zm", "decision_models/zephie_full_points.zm", "decision_models/lyra_v1.vpk", "decision_models/lyra_v2.vpk")
           $unexpected = @(git ls-files -- decision_models |
             Where-Object { [IO.Path]::GetExtension($_) -in ".zm", ".vpk" } |
             Where-Object { $_ -notin $allowedModels })
@@ -151,7 +152,7 @@ jobs:
         shell: pwsh
         run: |
           $out = "dist/ZephieRollingOn_v$env:VERSION"
-          $models = @("decision_models/vela_v4.2.vpk", "decision_models/zephie_m1_points.zm", "decision_models/lyra_v1.vpk")
+          $models = @("decision_models/vela_v4.2.vpk", "decision_models/zephie_full_points.zm", "decision_models/lyra_v1.vpk")
           foreach ($m in $models) {
             $p = Join-Path $out $m
             if (-not (Test-Path $p)) { throw "model package not bundled: $m" }

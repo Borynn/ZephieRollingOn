@@ -325,7 +325,7 @@ if ($velaPyd) {
 $BundleModels = @(
     "vela_v4.2.vpk",       # COMPACT100 Hinge
     "lyra_v1.vpk",         # Includes its open engine and import artwork
-    "zephie_m1_points.zm"
+    "zephie_full_points.zm"
 )
 Get-ChildItem $dm -File -ErrorAction SilentlyContinue |
     Where-Object { $_.Extension -in ".zm", ".vpk", ".dll", ".so", ".dylib" } |

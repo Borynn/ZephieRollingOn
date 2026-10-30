@@ -32,7 +32,7 @@ Zephie Rolling On — NOTICE
 
 ## 2. 第三方 VELA / LYRA 系列模型与运行时
 
-VELA v4.1、v4.2 及后续模型 LYRA v1 均来自第三方项目
+VELA v4.1、v4.2 及后续模型 LYRA v1、v2 均来自第三方项目
 [alfm201/adventure](https://github.com/alfm201/adventure)。
 其版权归 `alfm201` 所有；`alfm201` 已书面允许本项目使用、修改、打包和再分发这些
 组件，并允许本项目按 CC BY-NC-SA 4.0 发布。该授权明确涵盖后续版本、不同架构与新模型系列：
@@ -41,13 +41,14 @@ VELA v4.1、v4.2 及后续模型 LYRA v1 均来自第三方项目
 
 该授权也允许商业或非商业使用，但不涵盖 `alfm201` 无权授权的第三方游戏图片或其他素材。
 本项目对模型进行状态格式转换、接口适配与打包，未重新训练模型。
-便携包内置 VELA v4.2 和 LYRA v1，并保留对 VELA v4.1 的兼容。
+便携包内置 VELA v4.2 和 LYRA v1，并保留对 VELA v4.1 的兼容；LYRA v2 在仓库单独提供。
 
 | 包 | 权重格式 | 体积 | 推理方式 |
 |---|---|---|---|
 | `vela_v4.1.vpk` | COMPACT48 | 约 38 MB | CPU，搜索窗口 48 |
 | `vela_v4.2.vpk` | COMPACT100 Hinge | 约 87 MB | CPU，搜索窗口 100 |
 | `lyra_v1.vpk` | FP32 | 约 25 MB | GPU 优先，失败回退 CPU |
+| `lyra_v2.vpk` | FP32 | 约 65 MB | GPU 优先，失败回退 CPU |
 
 分发时请保留模型包内的来源、许可及第三方声明。ONNX Runtime DirectML 等第三方依赖仍适用
 其自身许可，相关文件随便携包提供。本项目的分发许可不取代上游原有许可。

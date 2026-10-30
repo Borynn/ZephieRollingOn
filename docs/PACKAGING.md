@@ -52,14 +52,14 @@ ZephieRollingOn_v<版本>/        # 解压后的根目录（名可自定）
   assets/                       # 模板与图标
   map.xlsx
   map_info.txt
-  decision_models/              # 模型包目录（构建时不打包含）
+  decision_models/              # 仅内置打包白名单中的模型
     README.md
   README_ZH.txt
   LICENSE
 ```
 
-模型包**不再需要用户手动下载**：`vela_v4.1.vpk`（约 38 MB）与
-`zephie_m1_points.zm`（约 17 MB）已打进分发包，解压即可用。
+便携包内置 `vela_v4.2.vpk`、`lyra_v1.vpk` 与 `zephie_full_points.zm`，解压即可用。
+`lyra_v2.vpk` 和原有 `zephie_m1_points.zm` 保留在仓库，不随便携包内置。
 
 打包脚本会先清空 `decision_models/`，再只复制 `$BundleModels` 列出的包——
 这样源码目录里残留的其他包不会意外混进发布件。

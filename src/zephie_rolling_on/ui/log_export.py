@@ -365,6 +365,9 @@ class LogExportDialog:
         restored = ensure_master_visible(master)
 
         dialog = tk.Toplevel(master)
+        from zephie_rolling_on.ui.modal_owner import attach_modal_owner
+
+        attach_modal_owner(dialog, master)
         # 测量内容需要 update_idletasks；先隐藏，避免 Tk 在定位前把窗口
         # 映射到默认的左上角，随后再跳到主窗口中央。
         dialog.withdraw()
@@ -538,15 +541,8 @@ class LogExportDialog:
         if self._closed:
             return
         try:
-            self._dialog.attributes("-topmost", True)
             self._dialog.lift()
             self._dialog.focus_force()
-            self._dialog.after(
-                250,
-                lambda: self._dialog.attributes("-topmost", False)
-                if not self._closed and self._dialog.winfo_exists()
-                else None,
-            )
         except Exception:
             pass
 

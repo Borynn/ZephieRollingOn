@@ -56,6 +56,17 @@ COLORS = {
 }
 
 
+def _font_layout(master: tk.Misc, font: tuple) -> tuple[tkfont.Font, int]:
+    """Measure rendered text in pixels; keep fonts in points and avoid global zoom."""
+    measured = tkfont.Font(root=master, font=font)
+    return measured, max(1, int(measured.metrics("linespace")))
+
+
+def _font_padding(line_height: int, base: int) -> int:
+    """Use the same text-relative spacing for all custom controls."""
+    return max(base, int(round(line_height * base / 16)))
+
+
 class RoundedButton(tk.Canvas):
     """Canvas-drawn rounded button; supports ``config(text=…, state=…)``."""
 
@@ -76,6 +87,10 @@ class RoundedButton(tk.Canvas):
         **kwargs: Any,
     ) -> None:
         parent_bg = parent.cget("bg") if "bg" not in kwargs else kwargs.pop("bg")
+        button_font = font or cute_font(9)
+        measured, line_height = _font_layout(parent, button_font)
+        height = max(height, line_height + 2 * _font_padding(line_height, 6))
+        width = max(width or 0, measured.measure(text) + 2 * _font_padding(line_height, 12))
         super().__init__(
             parent,
             height=height,
@@ -89,24 +104,47 @@ class RoundedButton(tk.Canvas):
         self.hover_bg = hover_bg or self.bg_color
         self.fg_color = fg_color or COLORS["primary"]
         self.border_color = border_color or COLORS["border"]
-        self.radius = radius
-        self.font = font or ("Microsoft YaHei UI", 9, "bold")
+        self.radius = min(height // 2, max(radius, int(round(height * 0.3))))
+        self.font = button_font
+        self._measured_font = measured
+        self._line_height = line_height
+        self._minimum_width = width
         self.current_bg = self.bg_color
         self._enabled = True
+        self._resize_job = None
         if width is not None:
             self.configure(width=width)
         self.bind("<Enter>", self._on_enter)
         self.bind("<Leave>", self._on_leave)
         self.bind("<Button-1>", self._on_click)
-        self.bind("<Configure>", self._draw)
+        self.bind("<Configure>", self._queue_resize)
+        self.bind("<Destroy>", self._cancel_resize)
+
+    def _queue_resize(self, _event: tk.Event) -> None:
+        if self._resize_job is None:
+            self._resize_job = self.after(16, self._flush_resize)
+
+    def _flush_resize(self) -> None:
+        self._resize_job = None
+        self._draw()
+
+    def _cancel_resize(self, event: tk.Event) -> None:
+        if event.widget is self and self._resize_job is not None:
+            self.after_cancel(self._resize_job)
+            self._resize_job = None
 
     def _draw(self, event: tk.Event | None = None) -> None:
-        self.delete("all")
         w = self.winfo_width() if event is None else int(event.width)
         h = self.winfo_height() if event is None else int(event.height)
         if w <= 1 or h <= 1:
             return
-        r = self.radius
+        fill = self.current_bg if self._enabled else COLORS["entry_bg"]
+        fg = self.fg_color if self._enabled else COLORS["faint"]
+        appearance = (w, h, fill, fg, self.text)
+        if getattr(self, "_last_appearance", None) == appearance:
+            return
+        self._last_appearance = appearance
+        r = min(self.radius, max(1, w // 2), max(1, h // 2))
         points = [
             r, 1,
             w - r, 1,
@@ -121,16 +159,15 @@ class RoundedButton(tk.Canvas):
             1, r,
             1, 1,
         ]
-        fill = self.current_bg if self._enabled else COLORS["entry_bg"]
-        fg = self.fg_color if self._enabled else COLORS["faint"]
-        self.create_polygon(
-            points,
-            fill=fill,
-            outline=self.border_color,
-            width=1.2,
-            smooth=True,
-        )
-        self.create_text(w / 2, h / 2, text=self.text, fill=fg, font=self.font)
+        if not hasattr(self, "_shape_item"):
+            self._shape_item = self.create_polygon(
+                points, outline=self.border_color, width=1.2, smooth=True,
+            )
+            self._text_item = self.create_text(0, 0, font=self.font)
+        self.coords(self._shape_item, *points)
+        self.itemconfigure(self._shape_item, fill=fill)
+        self.coords(self._text_item, w / 2, h / 2)
+        self.itemconfigure(self._text_item, text=self.text, fill=fg)
 
     def _on_enter(self, _e: tk.Event) -> None:
         if not self._enabled:
@@ -155,8 +192,13 @@ class RoundedButton(tk.Canvas):
             return super().configure(cnf)
         text = kw.pop("text", None)
         state = kw.pop("state", None)
-        if text is not None:
+        if text is not None and str(text) != self.text:
             self.text = str(text)
+            kw["width"] = max(
+                self._minimum_width,
+                self._measured_font.measure(self.text)
+                + 2 * _font_padding(self._line_height, 12),
+            )
         if state is not None:
             self._enabled = str(state) in ("normal", "active", tk.NORMAL)
             if not self._enabled:
@@ -170,13 +212,16 @@ class RoundedButton(tk.Canvas):
 
 def draw_dashed_divider(canvas: tk.Canvas, color: str | None = None) -> None:
     """在 Canvas 上画一条水平虚线分割线。"""
-    canvas.delete("all")
     w = canvas.winfo_width()
     if w <= 1:
         return
-    canvas.create_line(
-        0, 3, w, 3, fill=color or COLORS["border"], dash=(4, 3), width=1
-    )
+    if not canvas.find_withtag("divider"):
+        canvas.create_line(
+            0, 3, w, 3, fill=color or COLORS["border"],
+            dash=(4, 3), width=1, tags=("divider",),
+        )
+    else:
+        canvas.coords("divider", 0, 3, w, 3)
 
 
 def make_rounded_entry(
@@ -196,8 +241,13 @@ def make_rounded_entry(
     outline = border or COLORS["border"]
     text_fg = fg or COLORS["text"]
     parent_bg = parent.cget("bg")
+    font = font or cute_font(9, bold=False)
+    measured, line_height = _font_layout(parent, font)
+    inset_x = _font_padding(line_height, 7)
+    inset_y = _font_padding(line_height, 4)
+    height = max(height, line_height + 2 * inset_y)
     wrap = tk.Frame(parent, bg=parent_bg, highlightthickness=0, bd=0, width=1, height=height)
-    px_w = max(48, int(width) * 9 + 28)
+    px_w = max(48, measured.measure("0" * int(width)) + 2 * _font_padding(line_height, 14))
     wrap.configure(width=px_w, height=height)
     wrap.pack_propagate(False)
 
@@ -211,12 +261,17 @@ def make_rounded_entry(
     )
     canvas.place(x=0, y=0, relwidth=1, relheight=1)
 
+    last_size = None
+
     def _paint(_event: tk.Event | None = None) -> None:
-        # 只清背景层，绝不 delete("all")，以免误删其它绑定
-        canvas.delete("bg")
+        nonlocal last_size
+        # 复用背景图形，尺寸未变时不做重绘。
         w = max(int(canvas.winfo_width()), px_w)
         h = max(int(canvas.winfo_height()), height)
-        r = min(radius, h // 2, w // 2)
+        if last_size == (w, h):
+            return
+        last_size = (w, h)
+        r = min(max(radius, int(round(h * 0.4))), h // 2, w // 2)
         pts = [
             r, 1,
             w - r, 1,
@@ -231,9 +286,12 @@ def make_rounded_entry(
             1, r,
             1, 1,
         ]
-        canvas.create_polygon(
-            pts, fill=fill, outline=outline, width=1.2, smooth=True, tags=("bg",)
-        )
+        if canvas.find_withtag("bg"):
+            canvas.coords("bg", *pts)
+        else:
+            canvas.create_polygon(
+                pts, fill=fill, outline=outline, width=1.2, smooth=True, tags=("bg",)
+            )
         canvas.tag_lower("bg")
 
     canvas.bind("<Configure>", _paint)
@@ -254,7 +312,10 @@ def make_rounded_entry(
         exportselection=False,
     )
     # Entry 叠在 Canvas 之上，可正常选中与编辑
-    ent.place(relx=0.5, rely=0.5, anchor="center", width=px_w - 14, height=height - 8)
+    ent.place(
+        relx=0.5, rely=0.5, anchor="center",
+        width=px_w - 2 * inset_x, height=height - 2 * inset_y,
+    )
     wrap._rounded_canvas = canvas  # noqa: SLF001
     return wrap, ent
 
@@ -283,18 +344,20 @@ class ZephieMinimalCheck(tk.Frame):
         self._hover = False
         self._fg = fg or COLORS["text"]
         self._font = font or cute_font(9, bold=False)
+        _measured, line_height = _font_layout(self, self._font)
+        self._box_size = max(18, line_height)
         self._icons: dict[str, ImageTk.PhotoImage] = {}
         self._init_icons()
 
         self._cv = tk.Canvas(
             self,
-            width=18,
-            height=18,
+            width=self._box_size,
+            height=self._box_size,
             bg=parent_bg,
             highlightthickness=0,
             cursor="hand2",
         )
-        self._cv.pack(side="left", padx=(0, 8), pady=2)
+        self._cv.pack(side="left", padx=(0, _font_padding(line_height, 8)), pady=2)
         self._lbl = tk.Label(
             self,
             text=text,
@@ -318,9 +381,9 @@ class ZephieMinimalCheck(tk.Frame):
         self._draw()
 
     def _init_icons(self) -> None:
-        size = 18
+        size = self._box_size
         scale = 4
-        s = size * scale
+        s = 18 * scale
 
         def create_box(
             bg_color: str, border_color: str, border_width: int, *, checked: bool
@@ -381,7 +444,9 @@ class ZephieMinimalCheck(tk.Frame):
                 key = ("chk_" if checked else "unchk_") + (
                     "hover" if self._hover else "normal"
                 )
-            self._cv.create_image(9, 9, image=self._icons[key])
+            self._cv.create_image(
+                self._box_size / 2, self._box_size / 2, image=self._icons[key]
+            )
             return
         # Canvas 矢量兜底（与 zephie.py 一致）
         if checked:
@@ -407,6 +472,7 @@ class ZephieMinimalCheck(tk.Frame):
             self._cv.create_rectangle(
                 1, 1, 17, 17, fill="#FFFFFF", outline=border_col, width=1
             )
+        self._cv.scale("all", 0, 0, self._box_size / 18, self._box_size / 18)
 
     def _toggle(self, _e: tk.Event | None = None) -> None:
         if not self._enabled:
@@ -507,15 +573,16 @@ class ZephieSelect(tk.Frame):
         self._font = font or cute_font(9, bold=False)
         self._width = int(width)
         self._height = int(height)
-        if responsive:
-            from tkinter import font as tkfont
-
-            measured_font = tkfont.Font(master=self, font=self._font)
-            labels = [placeholder, *[label for label, _value in values]]
-            self._width = max(
-                self._width, max(measured_font.measure(label) for label in labels) + 34
-            )
-            self._height = max(self._height, measured_font.metrics("linespace") + 12)
+        measured_font, line_height = _font_layout(self, self._font)
+        self._text_inset = _font_padding(line_height, 10)
+        self._arrow_space = _font_padding(line_height, 24)
+        labels = [placeholder, *[label for label, _value in values]]
+        self._width = max(
+            self._width,
+            max(measured_font.measure(label) for label in labels)
+            + self._text_inset + self._arrow_space,
+        )
+        self._height = max(self._height, line_height + 2 * _font_padding(line_height, 6))
 
         self._lbl = tk.Label(
             self,
@@ -571,7 +638,10 @@ class ZephieSelect(tk.Frame):
         )
 
     def _fit_canvas(self, event: tk.Event) -> None:
+        if self._width == event.width and self._height == event.height:
+            return
         self._width = event.width
+        self._height = event.height
         self._draw()
 
     # -- 取值 --
@@ -599,9 +669,8 @@ class ZephieSelect(tk.Frame):
 
     def _draw(self) -> None:
         cv = self._cv
-        cv.delete("all")
         w, h = self._width, self._height
-        r = self._RADIUS
+        r = min(w // 2, h // 2, max(self._RADIUS, int(round(h * 0.27))))
         points = [
             r, 1, w - r, 1, w - 1, 1, w - 1, r,
             w - 1, h - r, w - 1, h - 1, w - r, h - 1, r, h - 1,
@@ -613,29 +682,28 @@ class ZephieSelect(tk.Frame):
             fill = COLORS["primary_light"]
         else:
             fill = "#FFFFFF"
-        cv.create_polygon(
-            points,
-            fill=fill,
-            outline=COLORS["border"],
-            width=1.2,
-            smooth=True,
-        )
-        cv.create_text(
-            10,
-            h // 2,
-            text=self._selected_label(),
-            anchor="w",
+        appearance = (w, h, fill, self._enabled, self._selected_label())
+        if getattr(self, "_last_appearance", None) == appearance:
+            return
+        self._last_appearance = appearance
+        if not hasattr(self, "_shape_item"):
+            self._shape_item = cv.create_polygon(
+                points, outline=COLORS["border"], width=1.2, smooth=True,
+            )
+            self._text_item = cv.create_text(0, 0, anchor="w", font=self._font)
+            self._arrow_item = cv.create_text(0, 0, text="▾", font=self._font)
+        cv.coords(self._shape_item, *points)
+        cv.itemconfigure(self._shape_item, fill=fill)
+        cv.coords(self._text_item, self._text_inset, h // 2)
+        cv.itemconfigure(
+            self._text_item, text=appearance[-1],
             fill=self._fg if self._enabled else COLORS["faint"],
-            font=self._font,
-            width=max(20, w - 34),
+            width=max(20, w - self._text_inset - self._arrow_space),
         )
-        cv.create_text(
-            w - 13,
-            h // 2,
-            text="▾",
-            anchor="center",
+        cv.coords(self._arrow_item, w - self._arrow_space // 2, h // 2)
+        cv.itemconfigure(
+            self._arrow_item,
             fill=COLORS["muted"] if self._enabled else COLORS["faint"],
-            font=self._font,
         )
 
     # -- 下拉 --
@@ -835,16 +903,10 @@ class ZephieSelect(tk.Frame):
 
 
 def cute_font(size: int, *, bold: bool = True) -> tuple:
-    """优先圆体；缺省回退雅黑。须在已有 Tk 根窗口后调用以枚举字体。"""
-    # 中文优先圆体/雅黑；Comic Sans 仅作西文回退（排在雅黑后，避免中文界面误选）
+    """统一使用微软雅黑 UI，仅在缺少该字体时回退。字号采用点数。"""
     preferred = (
-        "YouYuan",
-        "幼圆",
-        "华文圆体",
-        "STCaiyun",
         "Microsoft YaHei UI",
         "Microsoft YaHei",
-        "Comic Sans MS",
         "Segoe UI",
     )
     try:
